@@ -1,0 +1,5 @@
+.env
+PRIVATE_SETUP_VALUES.txt
+data/*.json
+node_modules/
+npm-debug.log*

@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: arcovia-ai-sourcing
+    runtime: node
+    startCommand: node src/server.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 24.14.0
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: ARCOVIA_FLOW_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5.5
+      - key: RESEND_API_KEY
+        sync: false
+      - key: FROM_EMAIL
+        value: Arcovia <updates@arcovia.africa>
+      - key: ADMIN_EMAIL
+        value: vutlharingobeni5@gmail.com
+      - key: UPDATE_INTERVAL_HOURS
+        value: "6"
+      - key: MAX_SOURCING_DAYS
+        value: "14"
+      - key: DEPOSIT_SKU
+        value: ARC-SOURCE-250
