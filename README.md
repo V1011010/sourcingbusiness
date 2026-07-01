@@ -103,13 +103,14 @@ If the Flow body Liquid fields need adjustment in the Shopify editor, keep the s
 
 The fastest version is to add product-detail fields to the deposit product page later. Until then, this backend sends a secure intake link after payment if the order does not include enough detail.
 
-The intake form asks the customer to choose a product category first. After that, it only shows fields that match the category:
+The intake form asks for customer details first, then asks the customer to choose a product category. After that, it only shows fields that match the category:
 
+- customer name, email, and phone/WhatsApp number
 - category-specific product description
 - category-specific condition choices
 - category-specific preference choices
-- size only where size or fit matters, such as clothing, shoes, jewellery, and sport fit items
-- item specifications, budget, deadline, and notes/links/photos
+- custom follow-up textboxes for that category, such as clothing size, shoe fit, vehicle model/year, machinery power/certifications, or device compatibility
+- item budget and notes/links/photos
 
 For example, machinery uses industrial condition and supplier-authenticity options and does not offer replica-style choices.
 

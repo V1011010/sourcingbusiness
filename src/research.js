@@ -98,7 +98,7 @@ Customer request:
 ${job.productRequest}
 
 Order: ${job.orderName}
-Customer budget/deadline details may be inside the request. If missing, say what is missing.
+Customer budget and sourcing preferences may be inside the request. If important details are missing, say what is missing.
 
 Task:
 Find trustworthy suppliers for this product. Do deep public-source research before recommending any supplier.

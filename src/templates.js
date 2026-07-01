@@ -31,7 +31,7 @@ We received your R250 sourcing deposit for ${job.orderName}.
 Before the AI can start the supplier search, please send the product details here:
 ${briefLink(job)}
 
-Please include the product name, exact specs, condition, budget, deadline, and any reference links or photos.
+Please include your contact details, item category, exact item name, condition, budget, and any category-specific details, reference links, or photos.
 
 Arcovia`
   };
@@ -84,6 +84,7 @@ Evidence: ${Array.isArray(supplier.evidence_urls) ? supplier.evidence_urls.join(
 
 Order: ${job.orderName}
 Customer: ${job.customerName || "n/a"} <${job.customerEmail || "n/a"}>
+Phone / WhatsApp: ${job.customerPhone || "n/a"}
 Request:
 ${job.productRequest || "No request captured"}
 

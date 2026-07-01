@@ -101,7 +101,7 @@ async function createJobFromOrderPayload(payload, source) {
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     nextUpdateAt: addHours(now, config.updateIntervalHours).toISOString(),
-    deadlineAt: addDays(now, config.maxSourcingDays).toISOString(),
+    sourcingWindowEndsAt: addDays(now, config.maxSourcingDays).toISOString(),
     rawOrder: payload,
     timeline: []
   };
@@ -146,131 +146,180 @@ function extractProductRequest(payload) {
 const CATEGORY_CONFIG = {
   clothing: {
     label: "Clothing & fashion",
-    productPlaceholder: "Example: Nike tech fleece, black hoodie, women's blazer, winter jacket...",
+    productPlaceholder: "Example: Nike Tech Fleece hoodie, women's blazer, winter jacket...",
     conditionOptions: ["New with tags", "New without tags", "Pre-owned excellent condition", "Any condition if clean and wearable"],
     preferenceOptions: ["Authentic branded only", "Unbranded alternative is fine", "Inspired/non-branded look is fine", "Local South African supplier preferred"],
-    size: {
-      label: "Clothing size",
-      placeholder: "Example: M, UK 10, EU 38, waist 32, chest 102cm, relaxed/oversized fit..."
-    },
-    specsPlaceholder: "Colour, fabric, fit, gender, exact style, reference links, photos..."
+    detailFields: [
+      { name: "clothing_size_fit", label: "Clothing size and fit", placeholder: "Example: M, UK 10, EU 38, waist 32, oversized fit, men's/women's/kids...", required: true },
+      { name: "clothing_colour_material", label: "Colour, fabric and style", placeholder: "Example: black cotton fleece, slim fit, zip-up, no logo, winter weight..." },
+      { name: "clothing_reference", label: "Reference link or photo description", placeholder: "Paste a reference link, or describe what the item should look like." }
+    ]
   },
   shoes: {
     label: "Shoes & sneakers",
     productPlaceholder: "Example: Air Jordan 4 Bred Reimagined, Adidas Samba, formal leather shoes...",
     conditionOptions: ["Brand new", "New/open box", "Pre-owned excellent condition", "Any condition if authentic and wearable"],
     preferenceOptions: ["Authentic branded only", "Original box preferred", "Used authentic pair acceptable", "Inspired/non-branded style is fine"],
-    size: {
-      label: "Shoe size",
-      placeholder: "Example: UK 8, US 9, EU 42, men's/women's/kids, wide fit if needed..."
-    },
-    specsPlaceholder: "Colourway, release year, gender sizing, box requirement, reference links..."
+    detailFields: [
+      { name: "shoe_size_fit", label: "Shoe size and fit", placeholder: "Example: UK 8, US 9, EU 42, men's/women's/kids, wide fit if needed...", required: true },
+      { name: "shoe_colourway", label: "Colourway or exact style", placeholder: "Example: black/red Bred, white/green Samba, patent leather, low-top/high-top..." },
+      { name: "shoe_box_auth", label: "Box and authenticity requirements", placeholder: "Example: original box required, proof of purchase preferred, used authentic pair acceptable..." }
+    ]
   },
   bags_accessories: {
     label: "Bags & accessories",
     productPlaceholder: "Example: laptop backpack, handbag, belt, sunglasses, wallet...",
     conditionOptions: ["Brand new", "New/open box", "Pre-owned excellent condition", "Any clean usable condition"],
     preferenceOptions: ["Authentic branded only", "Unbranded alternative is fine", "Inspired/non-branded look is fine", "Leather/material quality matters most"],
-    specsPlaceholder: "Material, colour, dimensions, compartments, logo/no logo preference, reference links..."
+    detailFields: [
+      { name: "bag_material_dimensions", label: "Material, colour and dimensions", placeholder: "Example: black leather, 15-inch laptop compartment, medium handbag, exact strap length..." },
+      { name: "bag_brand_logo", label: "Brand or logo preference", placeholder: "Example: authentic branded only, no visible logo, inspired style is fine..." },
+      { name: "bag_usage", label: "How it will be used", placeholder: "Example: daily work bag, travel, school, formal event, must fit laptop..." }
+    ]
   },
   watches_jewelry: {
     label: "Watches & jewellery",
     productPlaceholder: "Example: Casio watch, silver chain, engagement ring style, bracelet...",
     conditionOptions: ["Brand new", "Certified pre-owned", "Pre-owned excellent condition", "Any condition with proof of authenticity"],
     preferenceOptions: ["Authentic branded only", "Certificate/proof required", "Style match more important than brand", "Hypoallergenic/material-safe only"],
-    size: {
-      label: "Ring/watch/chain size",
-      placeholder: "Example: ring size N, 18cm wrist, 20mm strap, 55cm chain..."
-    },
-    specsPlaceholder: "Metal, stone, strap size, water resistance, warranty/certificate requirement..."
+    detailFields: [
+      { name: "jewelry_measurements", label: "Ring, wrist, strap or chain size", placeholder: "Example: ring size N, 18cm wrist, 20mm strap, 55cm chain...", required: true },
+      { name: "jewelry_material", label: "Material and design", placeholder: "Example: sterling silver, gold-plated, stainless steel, black strap, diamond-style stone..." },
+      { name: "jewelry_certificate", label: "Proof, certificate or warranty needs", placeholder: "Example: certificate required, serial number, water resistance, warranty..." }
+    ]
   },
   phones_computers: {
     label: "Phones, computers & tablets",
     productPlaceholder: "Example: iPhone 14 Pro 256GB, gaming laptop, iPad, MacBook charger...",
     conditionOptions: ["New sealed", "New/open box", "Certified refurbished", "Used excellent condition", "Used acceptable if fully tested"],
     preferenceOptions: ["Original/genuine only", "Warranty required", "Unlocked/network-free required", "Charger/accessories included preferred"],
-    specsPlaceholder: "Storage, RAM, processor, colour, network lock, battery health, warranty, region model..."
+    detailFields: [
+      { name: "device_model_specs", label: "Exact model and main specs", placeholder: "Example: iPhone 14 Pro 256GB, 16GB RAM laptop, M2 MacBook Air, iPad 10th gen...", required: true },
+      { name: "device_compatibility", label: "Compatibility requirements", placeholder: "Example: unlocked, Vodacom/MTN compatible, Windows 11, USB-C, local plug, region model..." },
+      { name: "device_battery_warranty", label: "Battery, accessories and warranty", placeholder: "Example: battery health above 85%, charger included, warranty required, no cracked screen..." }
+    ]
   },
   electronics: {
     label: "Electronics & gadgets",
     productPlaceholder: "Example: headphones, camera, drone, console, smart watch, speaker...",
     conditionOptions: ["New sealed", "New/open box", "Refurbished with warranty", "Used fully tested", "Any working condition"],
     preferenceOptions: ["Original brand only", "Warranty required", "Compatible replacement acceptable", "Best value over brand"],
-    specsPlaceholder: "Model number, voltage, plug type, compatibility, accessories, warranty need..."
+    detailFields: [
+      { name: "electronics_model", label: "Model number and exact version", placeholder: "Example: Sony WH-1000XM5, DJI Mini 4 Pro, PS5 disc edition, GoPro Hero 12...", required: true },
+      { name: "electronics_compatibility", label: "Compatibility, voltage or plug needs", placeholder: "Example: South African plug, 220V, works with iPhone, compatible replacement acceptable..." },
+      { name: "electronics_accessories", label: "Accessories and warranty", placeholder: "Example: charger, case, memory card, controller, warranty, original packaging..." }
+    ]
   },
   appliances: {
     label: "Home appliances",
     productPlaceholder: "Example: fridge, air fryer, washing machine, microwave, vacuum cleaner...",
     conditionOptions: ["Brand new", "Open box/display unit", "Refurbished with warranty", "Used fully working", "Any condition if repairable"],
     preferenceOptions: ["Warranty required", "Energy-efficient preferred", "Delivery/installation preferred", "Brand not important if reliable"],
-    specsPlaceholder: "Capacity, dimensions, power rating, colour, delivery area, installation needs..."
+    detailFields: [
+      { name: "appliance_capacity_size", label: "Capacity and physical size", placeholder: "Example: 300L fridge, 8kg washing machine, must fit 60cm space, countertop size...", required: true },
+      { name: "appliance_power_install", label: "Power, installation and delivery needs", placeholder: "Example: 220V, installation needed, delivery to Johannesburg, upstairs delivery..." },
+      { name: "appliance_brand_warranty", label: "Brand, energy rating and warranty", placeholder: "Example: Samsung/LG preferred, energy efficient, minimum 12-month warranty..." }
+    ]
   },
   furniture: {
     label: "Furniture & decor",
     productPlaceholder: "Example: office chair, couch, dining table, bed frame, wall art...",
     conditionOptions: ["Brand new", "Display unit", "Pre-owned excellent condition", "Any condition if structurally sound"],
     preferenceOptions: ["Exact style match", "Custom-made acceptable", "Local pickup acceptable", "Delivery required"],
-    specsPlaceholder: "Dimensions, material, colour, room type, assembly/delivery needs, reference photos..."
+    detailFields: [
+      { name: "furniture_dimensions", label: "Dimensions and room fit", placeholder: "Example: 2.2m couch, queen bed frame, desk must fit 120cm wall, small apartment...", required: true },
+      { name: "furniture_material_style", label: "Material, colour and style", placeholder: "Example: black leather, oak wood, modern, velvet, industrial, matching reference photo..." },
+      { name: "furniture_delivery", label: "Delivery and assembly needs", placeholder: "Example: delivery required, flat-pack okay, assembly needed, local pickup acceptable..." }
+    ]
   },
   vehicle_parts: {
     label: "Vehicle parts & accessories",
     productPlaceholder: "Example: Toyota Hilux headlight, BMW bumper, tyres, car radio...",
     conditionOptions: ["Brand new", "OEM used", "Aftermarket new", "Reconditioned", "Used tested"],
     preferenceOptions: ["OEM/genuine only", "Aftermarket compatible acceptable", "VIN/part-number match required", "Fitment proof required"],
-    specsPlaceholder: "Vehicle make/model/year, VIN if safe to share, part number, side/position, engine variant..."
+    detailFields: [
+      { name: "vehicle_details", label: "Vehicle make, model and year", placeholder: "Example: 2018 Toyota Hilux 2.8 GD-6, BMW F30 320i, VW Polo Vivo 2016...", required: true },
+      { name: "vehicle_part_number", label: "Part number, VIN or fitment details", placeholder: "Share part number or VIN only if you are comfortable. Include engine variant if relevant." },
+      { name: "vehicle_position", label: "Side, position and fitment proof", placeholder: "Example: front-left headlight, rear bumper, 16-inch tyres, must include fitment confirmation..." }
+    ]
   },
   machinery: {
     label: "Machinery & industrial equipment",
     productPlaceholder: "Example: CNC machine, compressor, generator, packaging machine, pump...",
     conditionOptions: ["Brand new", "Certified used", "Refurbished with service records", "Used working condition", "For parts/repair only"],
     preferenceOptions: ["OEM/authorised supplier only", "Service records required", "Warranty or return policy required", "Aftermarket compatible parts acceptable", "No replica/counterfeit equipment"],
-    specsPlaceholder: "Model, capacity, voltage/phase, certifications, manuals, spares, service history, delivery/rigging needs..."
+    detailFields: [
+      { name: "machine_specs", label: "Machine type and technical specifications", placeholder: "Example: 5kVA generator, 100L compressor, CNC bed size, pump flow rate, packaging speed...", required: true },
+      { name: "machine_power_capacity", label: "Power, capacity and certification needs", placeholder: "Example: 220V single phase, 380V three phase, SABS/CE, duty cycle, load capacity..." },
+      { name: "machine_service_warranty", label: "Service history, manuals and warranty", placeholder: "Example: service records required, manual required, spare parts available, warranty/return policy..." },
+      { name: "machine_delivery_install", label: "Delivery, rigging or installation", placeholder: "Example: forklift needed, installation required, delivery province, training required..." }
+    ]
   },
   tools: {
     label: "Tools & workshop equipment",
     productPlaceholder: "Example: Makita drill, welding machine, toolbox, compressor, torque wrench...",
     conditionOptions: ["Brand new", "Open box", "Refurbished", "Used tested", "Any working condition"],
     preferenceOptions: ["Original brand only", "Aftermarket compatible acceptable", "Warranty preferred", "Heavy-duty/professional grade only"],
-    specsPlaceholder: "Voltage, battery platform, power rating, attachments, use case, safety requirements..."
+    detailFields: [
+      { name: "tool_specs", label: "Tool specs and power rating", placeholder: "Example: 18V drill, 200A welder, 50L compressor, 1/2 inch torque wrench...", required: true },
+      { name: "tool_platform_accessories", label: "Battery platform and accessories", placeholder: "Example: Makita LXT battery, charger included, drill bits, case, gas/no gas welding..." },
+      { name: "tool_use_case", label: "Use case and duty level", placeholder: "Example: home DIY, professional workshop, heavy-duty daily use, safety requirements..." }
+    ]
   },
   beauty: {
     label: "Beauty, health & cosmetics",
     productPlaceholder: "Example: skincare product, hair tool, perfume, supplements...",
     conditionOptions: ["New sealed only", "New with intact packaging", "Unused open box if safe", "Not applicable"],
     preferenceOptions: ["Authorised retailer only", "Expiry date required", "Batch/serial proof preferred", "Cruelty-free/vegan preferred"],
-    specsPlaceholder: "Shade, scent, formula, expiry requirement, allergies, skin/hair type, certification needs..."
+    detailFields: [
+      { name: "beauty_variant", label: "Shade, scent, formula or variant", placeholder: "Example: shade 330, eau de parfum 100ml, retinol serum, keratin hair tool...", required: true },
+      { name: "beauty_safety", label: "Expiry, batch and safety needs", placeholder: "Example: sealed only, expiry date required, batch number preferred, authorised retailer only..." },
+      { name: "beauty_allergies", label: "Allergies, skin or hair type", placeholder: "Example: sensitive skin, oily skin, sulphate-free, fragrance-free, cruelty-free..." }
+    ]
   },
   sports_outdoor: {
     label: "Sports, gym & outdoor",
     productPlaceholder: "Example: treadmill, dumbbells, bicycle, tent, fishing gear...",
     conditionOptions: ["Brand new", "Open box", "Used excellent condition", "Used working condition", "Any safe usable condition"],
     preferenceOptions: ["Warranty preferred", "Commercial-grade preferred", "Local pickup acceptable", "Safety certification required"],
-    size: {
-      label: "Size/fit if relevant",
-      placeholder: "Example: bicycle frame 54cm, helmet L, gloves M, tent 4-person..."
-    },
-    specsPlaceholder: "Weight limit, dimensions, sport type, safety rating, accessories, delivery needs..."
+    detailFields: [
+      { name: "sports_activity", label: "Sport/activity and usage", placeholder: "Example: home gym, commercial gym, mountain biking, camping, fishing, beginner/pro use...", required: true },
+      { name: "sports_measurements", label: "Sport-specific measurements", placeholder: "Example: bicycle frame 54cm, helmet L, treadmill weight limit, tent 4-person..." },
+      { name: "sports_safety_delivery", label: "Safety, accessories and delivery", placeholder: "Example: safety certification, included weights, delivery needed, assembly required..." }
+    ]
   },
   collectibles: {
     label: "Collectibles, art & rare items",
     productPlaceholder: "Example: limited figure, trading card, signed item, vintage decor...",
     conditionOptions: ["Mint/sealed", "Excellent condition", "Good condition", "Any condition if rare", "Graded/certified only"],
     preferenceOptions: ["Authenticity proof required", "Certificate of authenticity required", "Original packaging preferred", "Local seller preferred"],
-    specsPlaceholder: "Edition, year, grading, serial number, packaging, proof, provenance, reference links..."
+    detailFields: [
+      { name: "collectible_identity", label: "Edition, year, serial or grading", placeholder: "Example: 1999 card, PSA 9, limited edition number, signed item, original artwork...", required: true },
+      { name: "collectible_auth", label: "Authenticity proof needed", placeholder: "Example: certificate of authenticity, grading certificate, provenance, seller proof..." },
+      { name: "collectible_packaging", label: "Packaging and condition expectations", placeholder: "Example: sealed box, mint card, frame included, minor wear acceptable..." }
+    ]
   },
   books_media: {
     label: "Books, media & documents",
     productPlaceholder: "Example: textbook, rare book, vinyl record, game disc, manual...",
     conditionOptions: ["New", "Like new", "Used good condition", "Any readable/working condition", "Digital copy acceptable"],
     preferenceOptions: ["Original physical copy", "Specific edition required", "ISBN/catalogue number required", "Local seller preferred"],
-    specsPlaceholder: "ISBN, edition, author/artist, language, format, region compatibility, publication year..."
+    detailFields: [
+      { name: "media_identity", label: "ISBN, edition, author or catalogue number", placeholder: "Example: ISBN, 4th edition, author, vinyl catalogue number, game title...", required: true },
+      { name: "media_format_language", label: "Format, language and region", placeholder: "Example: hardcover, paperback, English, PAL region, PS5 disc, vinyl LP..." },
+      { name: "media_condition", label: "Acceptable condition", placeholder: "Example: no missing pages, readable used copy okay, disc must be working, cover condition..." }
+    ]
   },
   other: {
     label: "Other / not sure",
     productPlaceholder: "Describe the item as clearly as possible...",
     conditionOptions: ["Brand new", "Used excellent condition", "Refurbished", "Any working/usable condition", "Not sure"],
     preferenceOptions: ["Authentic/original only", "Best value option", "Local supplier preferred", "Fastest available option", "Need help deciding"],
-    specsPlaceholder: "Important measurements, compatibility, colour, model, reference links, what to avoid..."
+    detailFields: [
+      { name: "other_details", label: "Important details", placeholder: "Describe the item, model, material, colour, use case, or exact match needed.", required: true },
+      { name: "other_compatibility", label: "Compatibility or measurements", placeholder: "If it must fit or work with something, explain that here." },
+      { name: "other_avoid", label: "What to avoid", placeholder: "Example: avoid replicas, avoid used, avoid overseas suppliers, avoid a certain colour..." }
+    ]
   }
 };
 
@@ -297,8 +346,12 @@ async function handleBriefForm(_req, res, token) {
     textarea { min-height:130px; }
     button { margin-top:20px; background:#7a1028; color:white; border:0; border-radius:999px; padding:14px 22px; font-weight:700; cursor:pointer; }
     button:disabled { opacity:.45; cursor:not-allowed; }
+    h2 { font-size:20px; margin:0 0 10px; }
     .muted { color:#d8b8c0; }
     .panel { margin-top:18px; padding:16px; border:1px solid #6b1024; border-radius:14px; background:#220c13; }
+    .details-grid { display:grid; gap:14px; margin-top:14px; }
+    .details-grid label { margin-top:0; }
+    .details-grid textarea { min-height:95px; }
     .hint { color:#d8b8c0; margin:8px 0 0; font-size:14px; line-height:1.4; }
     .hidden { display:none; }
   </style>
@@ -308,17 +361,30 @@ async function handleBriefForm(_req, res, token) {
     <h1>Arcovia product sourcing brief</h1>
     <p class="muted">Order ${escapeHtml(job.orderName)}. Select a category first so we only ask questions that match the item.</p>
     <form method="post">
+      <section class="panel">
+        <h2>Your details</h2>
+        <label for="customer_name">Full name</label>
+        <input id="customer_name" name="customer_name" required value="${escapeHtml(job.customerName || "")}" placeholder="Your full name" />
+
+        <label for="customer_email">Email address</label>
+        <input id="customer_email" name="customer_email" type="email" value="${escapeHtml(job.customerEmail || "")}" placeholder="you@example.com" />
+
+        <label for="customer_phone">Phone / WhatsApp number</label>
+        <input id="customer_phone" name="customer_phone" value="${escapeHtml(job.customerPhone || "")}" placeholder="Example: 071 234 5678" />
+        <p class="hint">Use the best contact details for updates about this sourcing request.</p>
+      </section>
+
       <label for="category">Product category</label>
       <select id="category" name="category" required>
         <option value="">Choose the closest category...</option>
         ${categoryOptionsHtml()}
       </select>
       <input type="hidden" id="category_label" name="category_label" />
-      <p id="categoryHint" class="hint">After you choose a category, the condition, preference, size, and specification fields will update.</p>
+      <p id="categoryHint" class="hint">After you choose a category, the item name and the right follow-up questions will appear.</p>
 
       <section id="categoryFields" class="panel hidden" aria-live="polite">
-        <label for="product">Exact product you want</label>
-        <textarea id="product" name="product" required disabled placeholder="Brand, model, item type, reference links, photo links...">${escapeHtml(job.productRequest || "")}</textarea>
+        <label for="product">Item name</label>
+        <input id="product" name="product" required disabled placeholder="Brand, model, item type, or exact product name..." value="${escapeHtml(singleLine(job.productRequest || ""))}" />
 
         <label for="condition">Preferred condition</label>
         <select id="condition" name="condition" required disabled></select>
@@ -326,19 +392,10 @@ async function handleBriefForm(_req, res, token) {
         <label for="preference">Preference</label>
         <select id="preference" name="preference" required disabled></select>
 
-        <div id="sizeWrap" class="hidden">
-          <label id="sizeLabel" for="size">Size</label>
-          <input id="size" name="size" disabled />
-        </div>
-
-        <label for="specs">Important specifications</label>
-        <textarea id="specs" name="specs" disabled placeholder="Model, colour, compatibility, material, dimensions, region..."></textarea>
+        <div id="customFields" class="details-grid"></div>
 
         <label for="budget">Maximum budget</label>
         <input id="budget" name="budget" disabled placeholder="Example: R2,500 total" />
-
-        <label for="deadline">Deadline</label>
-        <input id="deadline" name="deadline" disabled placeholder="Example: before Friday / within 2 weeks" />
 
         <label for="notes">Anything else we must know</label>
         <textarea id="notes" name="notes" disabled placeholder="What to avoid, preferred suppliers, delivery area..."></textarea>
@@ -356,12 +413,8 @@ async function handleBriefForm(_req, res, token) {
     const product = document.getElementById("product");
     const condition = document.getElementById("condition");
     const preference = document.getElementById("preference");
-    const sizeWrap = document.getElementById("sizeWrap");
-    const sizeLabel = document.getElementById("sizeLabel");
-    const size = document.getElementById("size");
-    const specs = document.getElementById("specs");
+    const customFields = document.getElementById("customFields");
     const budget = document.getElementById("budget");
-    const deadline = document.getElementById("deadline");
     const notes = document.getElementById("notes");
     const submitButton = document.getElementById("submitButton");
 
@@ -379,6 +432,27 @@ async function handleBriefForm(_req, res, token) {
       }
     }
 
+    function renderDetailFields(fields) {
+      customFields.innerHTML = "";
+      for (const field of fields || []) {
+        const wrapper = document.createElement("div");
+        const label = document.createElement("label");
+        const id = "detail__" + field.name;
+        label.htmlFor = id;
+        label.textContent = field.label;
+
+        const control = document.createElement("textarea");
+        control.id = id;
+        control.name = id;
+        control.placeholder = field.placeholder || "";
+        control.required = Boolean(field.required);
+
+        wrapper.appendChild(label);
+        wrapper.appendChild(control);
+        customFields.appendChild(wrapper);
+      }
+    }
+
     function setCategoryFields() {
       const selected = categories[category.value];
       const enabled = Boolean(selected);
@@ -386,40 +460,23 @@ async function handleBriefForm(_req, res, token) {
       product.disabled = !enabled;
       condition.disabled = !enabled;
       preference.disabled = !enabled;
-      specs.disabled = !enabled;
       budget.disabled = !enabled;
-      deadline.disabled = !enabled;
       notes.disabled = !enabled;
       submitButton.disabled = !enabled;
 
       if (!enabled) {
         categoryLabel.value = "";
-        categoryHint.textContent = "After you choose a category, the condition, preference, size, and specification fields will update.";
-        sizeWrap.classList.add("hidden");
-        size.disabled = true;
-        size.required = false;
+        categoryHint.textContent = "After you choose a category, the item name and the right follow-up questions will appear.";
+        renderDetailFields([]);
         return;
       }
 
       categoryLabel.value = selected.label;
       categoryHint.textContent = "Good. The questions below now match " + selected.label + ".";
       product.placeholder = selected.productPlaceholder;
-      specs.placeholder = selected.specsPlaceholder;
       fillSelect(condition, selected.conditionOptions, "Choose a matching condition...");
       fillSelect(preference, selected.preferenceOptions, "Choose the most important preference...");
-
-      if (selected.size) {
-        sizeWrap.classList.remove("hidden");
-        size.disabled = false;
-        size.required = true;
-        sizeLabel.textContent = selected.size.label;
-        size.placeholder = selected.size.placeholder;
-      } else {
-        sizeWrap.classList.add("hidden");
-        size.disabled = true;
-        size.required = false;
-        size.value = "";
-      }
+      renderDetailFields(selected.detailFields);
     }
 
     category.addEventListener("change", setCategoryFields);
@@ -435,17 +492,31 @@ async function handleBriefSubmit(req, res, token) {
 
   const body = await readBody(req);
   const form = new URLSearchParams(body);
+  const submittedName = String(form.get("customer_name") || "").trim();
+  const submittedEmail = String(form.get("customer_email") || "").trim();
+  const submittedPhone = String(form.get("customer_phone") || "").trim();
+  const categoryKey = String(form.get("category") || "").trim();
+  const selectedCategory = CATEGORY_CONFIG[categoryKey];
+  const detailLines = (selectedCategory?.detailFields || [])
+    .map((field) => fieldLine(field.label, form.get(`detail__${field.name}`)))
+    .filter(Boolean);
+
+  if (submittedName) job.customerName = submittedName;
+  if (submittedEmail) job.customerEmail = submittedEmail;
+  if (submittedPhone) job.customerPhone = submittedPhone;
+
   job.productRequest = [
-    `Category: ${form.get("category_label") || form.get("category") || ""}`,
-    `Product: ${form.get("product") || ""}`,
-    `Condition: ${form.get("condition") || ""}`,
-    `Preference: ${form.get("preference") || ""}`,
-    `Size: ${form.get("size") || ""}`,
-    `Specifications: ${form.get("specs") || ""}`,
-    `Budget: ${form.get("budget") || ""}`,
-    `Deadline: ${form.get("deadline") || ""}`,
-    `Notes: ${form.get("notes") || ""}`
-  ].join("\n");
+    fieldLine("Customer name", job.customerName),
+    fieldLine("Customer email", job.customerEmail),
+    fieldLine("Customer phone / WhatsApp", job.customerPhone),
+    fieldLine("Category", form.get("category_label") || selectedCategory?.label || categoryKey),
+    fieldLine("Item name", form.get("product")),
+    fieldLine("Condition", form.get("condition")),
+    fieldLine("Preference", form.get("preference")),
+    ...detailLines,
+    fieldLine("Maximum budget", form.get("budget")),
+    fieldLine("Notes", form.get("notes"))
+  ].filter(Boolean).join("\n");
   job.status = "researching";
   addTimeline(job, "brief_received", "Customer submitted product sourcing brief.");
   upsertJob(job);
@@ -462,9 +533,10 @@ async function sendDueUpdates() {
     if (new Date(job.nextUpdateAt) > now) continue;
     if (["quote_ready", "cancelled", "refunded"].includes(job.status)) continue;
 
-    if (new Date(job.deadlineAt) <= now && !["human_review", "quote_ready"].includes(job.status)) {
+    const sourcingWindowEndsAt = job.sourcingWindowEndsAt || job.deadlineAt;
+    if (sourcingWindowEndsAt && new Date(sourcingWindowEndsAt) <= now && !["human_review", "quote_ready"].includes(job.status)) {
       job.status = "no_match";
-      addTimeline(job, "deadline_reached", "Sourcing deadline reached without a verified match.");
+      addTimeline(job, "sourcing_window_reached", "Sourcing window reached without a verified match.");
     }
 
     await sendEmail({ to: job.customerEmail, ...stageUpdate(job) });
@@ -517,6 +589,15 @@ function escapeHtml(value) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+function singleLine(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function fieldLine(label, value) {
+  const text = String(value || "").trim();
+  return text ? `${label}: ${text}` : "";
 }
 
 function scriptJson(value) {
