@@ -162,11 +162,14 @@ For now, the backend sends a brief form link if Shopify does not pass product de
 
 Later, add fields to the deposit product page for:
 
+- customer name
+- email
+- phone / WhatsApp
+- product category
 - product name
-- size/specs
 - preferred condition
+- category-specific product details
 - budget
-- deadline
 - links/photos/notes
 
 Those fields should be saved as Shopify line-item properties so Flow can pass them to the backend.
@@ -223,4 +226,3 @@ The AI should:
 3. Send Arcovia the internal report.
 4. Wait for human approval.
 5. Then Arcovia sends the customer the quote or refund decision.
-

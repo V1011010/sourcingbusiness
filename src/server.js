@@ -533,7 +533,7 @@ async function sendDueUpdates() {
     if (new Date(job.nextUpdateAt) > now) continue;
     if (["quote_ready", "cancelled", "refunded"].includes(job.status)) continue;
 
-    const sourcingWindowEndsAt = job.sourcingWindowEndsAt || job.deadlineAt;
+    const sourcingWindowEndsAt = job.sourcingWindowEndsAt;
     if (sourcingWindowEndsAt && new Date(sourcingWindowEndsAt) <= now && !["human_review", "quote_ready"].includes(job.status)) {
       job.status = "no_match";
       addTimeline(job, "sourcing_window_reached", "Sourcing window reached without a verified match.");
