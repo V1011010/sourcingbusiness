@@ -19,7 +19,7 @@ const server = http.createServer(async (req, res) => {
         features: {
           shopifyOrderEnrichment: true,
           safeOrderResearchRetry: true,
-          adminJobsEndpoint: Boolean(config.adminStatusSecret)
+          adminJobsEndpoint: Boolean(config.adminStatusSecret || config.flowSecret)
         }
       });
     }
@@ -219,8 +219,11 @@ function mergeLineItems(payloadItems, shopifyItems) {
 }
 
 function handleAdminJobs(req, res) {
-  if (!config.adminStatusSecret) return json(res, 404, { error: "not_found" });
-  if (req.headers["x-arcovia-admin-secret"] !== config.adminStatusSecret) {
+  const validAdminSecret = config.adminStatusSecret && req.headers["x-arcovia-admin-secret"] === config.adminStatusSecret;
+  const validFlowSecret = config.flowSecret && req.headers["x-arcovia-flow-secret"] === config.flowSecret;
+
+  if (!config.adminStatusSecret && !config.flowSecret) return json(res, 404, { error: "not_found" });
+  if (!validAdminSecret && !validFlowSecret) {
     return json(res, 401, { error: "invalid_admin_secret" });
   }
 
