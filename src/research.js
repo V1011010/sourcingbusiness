@@ -152,20 +152,30 @@ async function handleResearchError(jobId, error) {
   const job = getJob(jobId);
   if (!job) return;
 
-  const attempts = Number(job.researchAttemptCount || 0);
+  const originalAttempts = Number(job.researchAttemptCount || 0);
   const maxAttempts = maxResearchAttempts();
   const safeMessage = safeErrorMessage(error);
+  const technicalError = isTechnicalResearchError(safeMessage);
 
-  if (attempts > 0 && attempts < maxAttempts) {
-    const nextResearchAt = addMinutes(new Date(), researchRetryDelayMinutes()).toISOString();
+  if (technicalError && originalAttempts > 0) {
+    job.researchAttemptCount = Math.max(0, originalAttempts - 1);
+  }
+
+  const recordedAttempts = Number(job.researchAttemptCount || 0);
+
+  if (recordedAttempts < maxAttempts) {
+    const delayMinutes = technicalError ? technicalRetryDelayMinutes() : researchRetryDelayMinutes();
+    const nextResearchAt = addMinutes(new Date(), delayMinutes).toISOString();
+    const nextAttempt = recordedAttempts + 1;
     job.status = "researching";
     job.currentResearchAttempt = null;
     job.lastResearchError = safeMessage;
     job.nextResearchAt = nextResearchAt;
-    addTimeline(job, "research_retry_scheduled", `AI research hit an error on check ${attempts}. A retry is scheduled for ${formatJohannesburg(nextResearchAt)}.`, {
+    addTimeline(job, "research_retry_scheduled", `${technicalError ? "AI research hit a technical/API limit before the check completed" : `AI research hit an error on check ${originalAttempts}`}. A retry is scheduled for ${formatJohannesburg(nextResearchAt)}.`, {
       error: safeMessage,
+      technicalError,
       nextResearchAt,
-      nextAttempt: attempts + 1,
+      nextAttempt,
       maxAttempts
     });
     upsertJob(job);
@@ -176,7 +186,7 @@ async function handleResearchError(jobId, error) {
   job.status = "research_failed";
   job.currentResearchAttempt = null;
   job.lastResearchError = safeMessage;
-  addTimeline(job, "research_failed", safeMessage, { attempts, maxAttempts });
+  addTimeline(job, "research_failed", safeMessage, { attempts: originalAttempts, maxAttempts });
   upsertJob(job);
   await sendEmail({ to: config.adminEmail, ...researchFailure(job, safeMessage) });
 }
@@ -189,7 +199,12 @@ async function performSupplierResearch(job, attemptNumber, maxAttempts) {
   const requestBody = {
     model: config.openaiModel,
     max_output_tokens: config.openaiMaxOutputTokens,
-    tools: [{ type: "web_search", external_web_access: true }],
+    tools: [{
+      type: "web_search",
+      external_web_access: true,
+      search_context_size: config.openaiWebSearchContextSize,
+      return_token_budget: "default"
+    }],
     tool_choice: "required",
     include: ["web_search_call.action.sources"],
     input: buildResearchPrompt(job, attemptNumber, maxAttempts)
@@ -515,6 +530,14 @@ function researchRetryDelayMinutes() {
   if (Number(config.researchRetryDelayMinutes) > 0) return Number(config.researchRetryDelayMinutes);
   const spreadAcrossWindow = Math.floor((Number(config.maxSourcingDays || 14) * 24 * 60) / maxResearchAttempts());
   return Math.max(60, spreadAcrossWindow);
+}
+
+function technicalRetryDelayMinutes() {
+  return Math.max(1, Number(config.researchTechnicalRetryDelayMinutes || 15));
+}
+
+function isTechnicalResearchError(message) {
+  return /429|rate limit|rate_limit|tokens per min|TPM|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|5\d\d/.test(message);
 }
 
 function sortByMostExpensiveFirst(items) {

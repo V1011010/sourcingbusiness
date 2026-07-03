@@ -22,6 +22,9 @@ const server = http.createServer(async (req, res) => {
           cappedOpenAIResearchTokens: true,
           deepResearchLoop: true,
           deepResearchMaxAttempts: config.deepResearchMaxAttempts,
+          deepResearchSearchContextSize: config.openaiWebSearchContextSize,
+          deepResearchReasoningEffort: config.openaiReasoningEffort,
+          deepResearchMaxOutputTokens: config.openaiMaxOutputTokens,
           refundDueStatus: true,
           adminJobsEndpoint: Boolean(config.adminStatusSecret || config.flowSecret)
         }
@@ -87,7 +90,8 @@ async function handleFlowOrderPaid(req, res) {
   }
 
   const job = await createJobFromOrderPayload(payload, "shopify_flow", {
-    skipDepositEmail: req.headers["x-arcovia-skip-deposit-email"] === "1"
+    skipDepositEmail: req.headers["x-arcovia-skip-deposit-email"] === "1",
+    forceResearch: req.headers["x-arcovia-force-research"] === "1"
   });
   json(res, 202, { ok: true, job_id: job.id, status: job.status });
 }
@@ -117,7 +121,7 @@ async function createJobFromOrderPayload(payload, source, options = {}) {
   const existing = readJobs().find((job) => job.orderId === orderId || job.orderName === orderName);
   const enrichedPayload = await enrichOrderPayload(payload);
   const productRequest = extractProductRequest(enrichedPayload);
-  if (existing) return updateExistingJobFromOrder(existing, enrichedPayload, productRequest, source);
+  if (existing) return updateExistingJobFromOrder(existing, enrichedPayload, productRequest, source, options);
 
   const now = new Date();
   const job = {
@@ -156,7 +160,7 @@ async function createJobFromOrderPayload(payload, source, options = {}) {
   return job;
 }
 
-async function updateExistingJobFromOrder(existing, payload, productRequest, source) {
+async function updateExistingJobFromOrder(existing, payload, productRequest, source, options = {}) {
   existing.rawOrder = {
     ...(existing.rawOrder || {}),
     ...payload
@@ -170,6 +174,16 @@ async function updateExistingJobFromOrder(existing, payload, productRequest, sou
   if (existing.productRequest?.trim() && ["awaiting_brief", "research_failed"].includes(existing.status)) {
     existing.status = "researching";
     addTimeline(existing, "research_requeued", "AI supplier research was queued from the latest paid-order payload.");
+    upsertJob(existing);
+    queueResearch(existing.id);
+    return existing;
+  }
+
+  if (options.forceResearch && existing.productRequest?.trim()) {
+    existing.status = "researching";
+    existing.currentResearchAttempt = null;
+    existing.nextResearchAt = null;
+    addTimeline(existing, "research_requeued", "AI supplier research was force-queued from the latest paid-order payload.");
     upsertJob(existing);
     queueResearch(existing.id);
     return existing;

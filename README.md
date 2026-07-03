@@ -50,6 +50,8 @@ Fill in `.env`:
 - `ADMIN_EMAIL`
 - `DEEP_RESEARCH_MAX_ATTEMPTS` defaults to `10`
 - `RESEARCH_RETRY_DELAY_MINUTES` defaults to `0`, which spreads retries across `MAX_SOURCING_DAYS`
+- `OPENAI_WEB_SEARCH_CONTEXT_SIZE` defaults to `low` so hosted web search stays within the current OpenAI rate limits
+- `RESEARCH_TECHNICAL_RETRY_DELAY_MINUTES` defaults to `15`; technical API/rate-limit errors retry quickly and do not count as one of the 10 sourcing checks
 
 Start:
 
@@ -139,6 +141,7 @@ Important status fields:
 - `researchRunning: true` means the AI is actively doing a sourcing check right now.
 - `researchAttemptCount: 1` through `10` shows how many deep checks have completed or started.
 - `nextResearchAt` shows when the next automatic check will run.
+- `deepResearchSearchContextSize`, `deepResearchReasoningEffort`, and `deepResearchMaxOutputTokens` are exposed on `/health` so you can confirm Render is using the safe OpenAI settings.
 - `supplierCount` is the number of trusted sources that survived filtering.
 - `candidateSourceCount` is the number of sources the AI found before trust filtering.
 - `rejectedSourceCount` is the number removed because they looked unsafe, untrusted, or had poor evidence.
