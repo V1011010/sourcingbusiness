@@ -172,7 +172,7 @@ Later, add fields to the deposit product page for:
 
 - customer name
 - email
-- phone / WhatsApp
+- phone number
 - product category
 - product name
 - preferred condition

@@ -2,9 +2,9 @@ import http from "node:http";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { config } from "./config.js";
 import { sendEmail } from "./email.js";
-import { queueResearch } from "./research.js";
+import { isResearchRunning, queueDueResearchAttempts, queueResearch } from "./research.js";
 import { fetchShopifyOrderDetails } from "./shopify.js";
-import { depositReceived, stageUpdate } from "./templates.js";
+import { adminRefundDue, customerRefundDue, depositReceived, stageUpdate } from "./templates.js";
 import { addTimeline, getJob, readJobs, upsertJob } from "./storage.js";
 
 const server = http.createServer(async (req, res) => {
@@ -20,13 +20,16 @@ const server = http.createServer(async (req, res) => {
           shopifyOrderEnrichment: true,
           safeOrderResearchRetry: true,
           cappedOpenAIResearchTokens: true,
+          deepResearchLoop: true,
+          deepResearchMaxAttempts: config.deepResearchMaxAttempts,
+          refundDueStatus: true,
           adminJobsEndpoint: Boolean(config.adminStatusSecret || config.flowSecret)
         }
       });
     }
 
     if (req.method === "GET" && url.pathname === "/admin/jobs") {
-      return handleAdminJobs(req, res);
+      return handleAdminJobs(req, res, url);
     }
 
     if (req.method === "POST" && url.pathname === "/flow/order-paid") {
@@ -61,6 +64,7 @@ server.listen(config.port, () => {
 
 setInterval(() => {
   sendDueUpdates().catch((error) => console.error("update scheduler failed", error));
+  queueDueResearchAttempts();
 }, 60_000);
 
 async function handleFlowOrderPaid(req, res) {
@@ -126,6 +130,8 @@ async function createJobFromOrderPayload(payload, source, options = {}) {
     customerName: enrichedPayload.customer_name || enrichedPayload.customer?.displayName || enrichedPayload.customer?.first_name || "",
     productRequest,
     status: productRequest ? "researching" : "awaiting_brief",
+    researchAttemptCount: 0,
+    maxResearchAttempts: config.deepResearchMaxAttempts,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     nextUpdateAt: addHours(now, config.updateIntervalHours).toISOString(),
@@ -219,7 +225,7 @@ function mergeLineItems(payloadItems, shopifyItems) {
   }));
 }
 
-function handleAdminJobs(req, res) {
+function handleAdminJobs(req, res, url) {
   const validAdminSecret = config.adminStatusSecret && req.headers["x-arcovia-admin-secret"] === config.adminStatusSecret;
   const validFlowSecret = config.flowSecret && req.headers["x-arcovia-flow-secret"] === config.flowSecret;
 
@@ -228,25 +234,54 @@ function handleAdminJobs(req, res) {
     return json(res, 401, { error: "invalid_admin_secret" });
   }
 
-  const jobs = readJobs().map((job) => ({
-    id: job.id,
-    orderId: job.orderId,
-    orderName: job.orderName,
-    customerEmail: job.customerEmail,
-    status: job.status,
-    productRequestPresent: Boolean(job.productRequest?.trim()),
-    supplierCount: job.research?.suppliers?.length || 0,
-    createdAt: job.createdAt,
-    updatedAt: job.updatedAt,
-    researchStartedAt: job.researchStartedAt || null,
-    researchCompletedAt: job.researchCompletedAt || null,
-    timeline: (job.timeline || []).map((event) => ({
-      type: event.type,
-      message: event.message,
-      at: event.at,
-      meta: event.meta || {}
-    }))
-  }));
+  const details = url.searchParams.get("details") === "1";
+  const jobs = readJobs().map((job) => {
+    const base = {
+      id: job.id,
+      orderId: job.orderId,
+      orderName: job.orderName,
+      customerEmail: job.customerEmail,
+      status: job.status,
+      refundStatus: job.refundStatus || null,
+      refundReason: job.refundReason || null,
+      productRequestPresent: Boolean(job.productRequest?.trim()),
+      supplierCount: job.research?.suppliers?.length || 0,
+      candidateSourceCount: job.research?.candidateSources?.length || 0,
+      rejectedSourceCount: job.research?.rejectedSources?.length || 0,
+      shippingAgentCount: job.research?.shippingAgents?.length || 0,
+      researchAttemptCount: job.researchAttemptCount || 0,
+      maxResearchAttempts: job.maxResearchAttempts || config.deepResearchMaxAttempts,
+      currentResearchAttempt: job.currentResearchAttempt || null,
+      researchRunning: Boolean(job.id && isResearchRunning(job.id)),
+      nextResearchAt: job.nextResearchAt || null,
+      nextUpdateAt: job.nextUpdateAt || null,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      researchStartedAt: job.researchStartedAt || null,
+      researchCompletedAt: job.researchCompletedAt || null,
+      latestAttempt: (job.researchAttempts || []).at(-1) || null,
+      researchSummary: job.research?.summary || null,
+      timeline: (job.timeline || []).map((event) => ({
+        type: event.type,
+        message: event.message,
+        at: event.at,
+        meta: event.meta || {}
+      }))
+    };
+
+    if (!details) return base;
+
+    return {
+      ...base,
+      productRequest: job.productRequest || "",
+      suppliers: job.research?.suppliers || [],
+      candidateSources: job.research?.candidateSources || [],
+      rejectedSources: job.research?.rejectedSources || [],
+      shippingAgents: job.research?.shippingAgents || [],
+      webSources: job.research?.webSources || [],
+      rawResearchPreview: String(job.research?.rawText || "").slice(0, 4000)
+    };
+  });
 
   json(res, 200, { ok: true, jobs });
 }
@@ -528,7 +563,7 @@ async function handleBriefForm(_req, res, token) {
         <label for="customer_email">Email address</label>
         <input id="customer_email" name="customer_email" type="email" value="${escapeHtml(job.customerEmail || "")}" placeholder="you@example.com" />
 
-        <label for="customer_phone">Phone / WhatsApp number</label>
+        <label for="customer_phone">Phone number</label>
         <input id="customer_phone" name="customer_phone" value="${escapeHtml(job.customerPhone || "")}" placeholder="Example: 071 234 5678" />
         <p class="hint">Use the best contact details for updates about this sourcing request.</p>
       </section>
@@ -667,7 +702,7 @@ async function handleBriefSubmit(req, res, token) {
   job.productRequest = [
     fieldLine("Customer name", job.customerName),
     fieldLine("Customer email", job.customerEmail),
-    fieldLine("Customer phone / WhatsApp", job.customerPhone),
+    fieldLine("Customer phone number", job.customerPhone),
     fieldLine("Category", form.get("category_label") || selectedCategory?.label || categoryKey),
     fieldLine("Item name", form.get("product")),
     fieldLine("Condition", form.get("condition")),
@@ -677,6 +712,10 @@ async function handleBriefSubmit(req, res, token) {
     fieldLine("Notes", form.get("notes"))
   ].filter(Boolean).join("\n");
   job.status = "researching";
+  job.researchAttemptCount = 0;
+  job.maxResearchAttempts = config.deepResearchMaxAttempts;
+  job.currentResearchAttempt = null;
+  job.nextResearchAt = null;
   addTimeline(job, "brief_received", "Customer submitted product sourcing brief.");
   upsertJob(job);
 
@@ -693,6 +732,7 @@ async function handleStatusPage(_req, res, token) {
   const researchSummary = job.research?.summary
     ? `<section><h2>Internal research summary</h2><p>${escapeHtml(job.research.summary)}</p><p class="muted">Arcovia reviews supplier evidence before any supplier details or quote is sent to you.</p></section>`
     : "";
+  const progress = researchProgressHtml(job);
 
   html(res, 200, `<!doctype html>
 <html>
@@ -715,6 +755,7 @@ async function handleStatusPage(_req, res, token) {
     <h1>Arcovia sourcing status</h1>
     <div class="badge">${escapeHtml(statusLabel(job.status))}</div>
     <p class="muted">Order: ${escapeHtml(job.orderName)}<br>Created: ${escapeHtml(formatEventTime(job.createdAt))}<br>Sourcing window ends: ${escapeHtml(formatEventTime(job.sourcingWindowEndsAt))}</p>
+    ${progress}
     ${job.status === "awaiting_brief" ? `<p><a href="${escapeHtml(briefLinkForStatus(job))}">Complete your product brief</a> so the AI can start searching.</p>` : ""}
     ${researchSummary}
     <h2>Timeline</h2>
@@ -730,12 +771,19 @@ async function sendDueUpdates() {
   for (const job of jobs) {
     if (!job.nextUpdateAt) continue;
     if (new Date(job.nextUpdateAt) > now) continue;
-    if (["quote_ready", "cancelled", "refunded"].includes(job.status)) continue;
+    if (["quote_ready", "cancelled", "refunded", "refund_due"].includes(job.status)) continue;
 
     const sourcingWindowEndsAt = job.sourcingWindowEndsAt;
     if (sourcingWindowEndsAt && new Date(sourcingWindowEndsAt) <= now && !["human_review", "quote_ready"].includes(job.status)) {
-      job.status = "no_match";
-      addTimeline(job, "sourcing_window_reached", "Sourcing window reached without a verified match.");
+      job.status = "refund_due";
+      job.refundStatus = "manual_refund_required";
+      job.refundReason = "The sourcing window ended without a verified trustworthy match.";
+      job.nextUpdateAt = null;
+      addTimeline(job, "refund_due", job.refundReason);
+      upsertJob(job);
+      await sendEmail({ to: config.adminEmail, ...adminRefundDue(job) });
+      await sendEmail({ to: job.customerEmail, ...customerRefundDue(job) });
+      continue;
     }
 
     await sendEmail({ to: job.customerEmail, ...stageUpdate(job) });
@@ -807,6 +855,21 @@ function briefLinkForStatus(job) {
   return `${config.publicBaseUrl.replace(/\/$/, "")}/brief/${job.publicToken}`;
 }
 
+function researchProgressHtml(job) {
+  const attempt = job.researchAttemptCount || 0;
+  const maxAttempts = job.maxResearchAttempts || config.deepResearchMaxAttempts;
+  const current = job.currentResearchAttempt ? `<br>Current check: ${escapeHtml(job.currentResearchAttempt)} of ${escapeHtml(maxAttempts)}` : "";
+  const next = job.nextResearchAt ? `<br>Next deep check: ${escapeHtml(formatEventTime(job.nextResearchAt))}` : "";
+  const suppliers = job.research?.suppliers?.length || 0;
+  const candidates = job.research?.candidateSources?.length || 0;
+  const rejected = job.research?.rejectedSources?.length || 0;
+
+  return `<section>
+    <h2>Research progress</h2>
+    <p class="muted">Deep checks completed: ${escapeHtml(attempt)} of ${escapeHtml(maxAttempts)}${current}${next}<br>Trusted suppliers waiting for review: ${escapeHtml(suppliers)}<br>Candidate sources checked: ${escapeHtml(candidates)}<br>Unsafe or untrusted sources removed: ${escapeHtml(rejected)}</p>
+  </section>`;
+}
+
 function formatEventTime(value) {
   if (!value) return "n/a";
   return new Date(value).toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg" });
@@ -820,6 +883,7 @@ function statusLabel(status) {
     human_review: "Supplier research under review",
     quote_ready: "Quote ready",
     no_match: "No match found yet",
+    refund_due: "Refund due",
     research_failed: "Research needs attention"
   };
   return labels[status] || String(status || "In progress").replaceAll("_", " ");

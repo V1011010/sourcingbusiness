@@ -24,7 +24,9 @@ services:
       - key: OPENAI_MODEL
         value: gpt-5.5
       - key: OPENAI_MAX_OUTPUT_TOKENS
-        value: "1800"
+        value: "3500"
+      - key: OPENAI_REASONING_EFFORT
+        value: medium
       - key: RESEND_API_KEY
         sync: false
       - key: FROM_EMAIL
@@ -35,5 +37,11 @@ services:
         value: "6"
       - key: MAX_SOURCING_DAYS
         value: "14"
+      - key: DEEP_RESEARCH_MAX_ATTEMPTS
+        value: "10"
+      - key: RESEARCH_RETRY_DELAY_MINUTES
+        value: "0"
+      - key: DEEP_RESEARCH_MAX_CANDIDATES
+        value: "12"
       - key: DEPOSIT_SKU
         value: ARC-DEPOSIT-250,ARC-SOURCE-250
