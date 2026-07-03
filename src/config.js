@@ -29,7 +29,7 @@ export const config = {
   shopifyAdminApiVersion: process.env.SHOPIFY_ADMIN_API_VERSION || "2026-04",
   openaiApiKey: process.env.OPENAI_API_KEY || "",
   openaiModel: process.env.OPENAI_MODEL || "gpt-5.5",
-  openaiMaxOutputTokens: Number(process.env.OPENAI_MAX_OUTPUT_TOKENS || 2200),
+  openaiMaxOutputTokens: Number(process.env.OPENAI_MAX_OUTPUT_TOKENS || 5000),
   openaiReasoningEffort: process.env.OPENAI_REASONING_EFFORT || "low",
   openaiWebSearchContextSize: process.env.OPENAI_WEB_SEARCH_CONTEXT_SIZE || "low",
   resendApiKey: process.env.RESEND_API_KEY || "",

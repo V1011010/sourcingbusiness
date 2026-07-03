@@ -230,7 +230,7 @@ async function performSupplierResearch(job, attemptNumber, maxAttempts) {
 
   const data = JSON.parse(body);
   const text = data.output_text || extractOutputText(data) || "";
-  const parsed = parseJsonReport(text);
+  const parsed = parseJsonReport(text) || parsePartialJsonReport(text);
   const allSources = normalizeSourceList(parsed?.sources || parsed?.suppliers || parsed?.candidate_sources || []);
   const trustedSources = filterTrustedSources(allSources);
   const rejectedSources = normalizeRejectedSources(parsed?.rejected_sources || parsed?.unsafe_sources || []);
@@ -284,6 +284,8 @@ Rules:
 - Do not invent availability, prices, reviews, addresses, social pages, or ratings.
 - If a price is visible, include currency and total estimate. If shipping/import fees are separate, note that.
 - Sort final trusted sources from most expensive to cheapest.
+- Return at most ${config.maxResearchCandidates} final trusted/needs-more-checks sources, up to 6 shipping agents, and up to 12 rejected sources.
+- Keep each evidence summary under 220 characters so the JSON finishes within the token budget.
 - Prefer official retailers, established marketplaces, verified physical shops, authorized distributors, and suppliers with clear delivery proof.
 - Keep wording factual. Do not make defamatory claims; describe evidence and red flags internally.
 - Return compact valid JSON only. Put URLs inside evidence_urls. Do not use Markdown.
@@ -506,6 +508,106 @@ function parseJsonReport(text) {
       }
     }
     return null;
+  }
+}
+
+function parsePartialJsonReport(text) {
+  if (!text?.includes('"sources"')) return null;
+
+  const sources = extractJsonObjectsFromArray(text, "sources");
+  const shippingAgents = extractJsonObjectsFromArray(text, "shipping_agents");
+  const rejectedSources = extractJsonObjectsFromArray(text, "rejected_sources");
+  if (!sources.length && !shippingAgents.length && !rejectedSources.length) return null;
+
+  return {
+    summary: extractJsonStringField(text, "summary") || "AI research returned partial structured JSON. Review raw report for any truncated fields.",
+    missing_customer_details: extractJsonStringArray(text, "missing_customer_details"),
+    sources,
+    shipping_agents: shippingAgents,
+    rejected_sources: rejectedSources,
+    recommended_next_customer_message: extractJsonStringField(text, "recommended_next_customer_message")
+  };
+}
+
+function extractJsonObjectsFromArray(text, key) {
+  const keyIndex = text.indexOf(`"${key}"`);
+  if (keyIndex === -1) return [];
+  const arrayStart = text.indexOf("[", keyIndex);
+  if (arrayStart === -1) return [];
+
+  const objects = [];
+  let depth = 0;
+  let objectStart = -1;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = arrayStart + 1; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === "{") {
+      if (depth === 0) objectStart = index;
+      depth += 1;
+      continue;
+    }
+
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0 && objectStart !== -1) {
+        const objectText = text.slice(objectStart, index + 1);
+        try {
+          objects.push(JSON.parse(objectText));
+        } catch {
+          // Ignore malformed partial objects and keep any complete objects already recovered.
+        }
+        objectStart = -1;
+      }
+      continue;
+    }
+
+    if (char === "]" && depth === 0) break;
+  }
+
+  return objects;
+}
+
+function extractJsonStringField(text, key) {
+  const match = text.match(new RegExp(`"${key}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`, "s"));
+  if (!match) return "";
+  try {
+    return JSON.parse(`"${match[1]}"`);
+  } catch {
+    return match[1];
+  }
+}
+
+function extractJsonStringArray(text, key) {
+  const keyIndex = text.indexOf(`"${key}"`);
+  if (keyIndex === -1) return [];
+  const arrayStart = text.indexOf("[", keyIndex);
+  const arrayEnd = text.indexOf("]", arrayStart);
+  if (arrayStart === -1 || arrayEnd === -1) return [];
+  const arrayText = text.slice(arrayStart, arrayEnd + 1);
+  try {
+    const parsed = JSON.parse(arrayText);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
   }
 }
 
