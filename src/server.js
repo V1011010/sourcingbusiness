@@ -80,7 +80,9 @@ async function handleFlowOrderPaid(req, res) {
     });
   }
 
-  const job = await createJobFromOrderPayload(payload, "shopify_flow");
+  const job = await createJobFromOrderPayload(payload, "shopify_flow", {
+    skipDepositEmail: req.headers["x-arcovia-skip-deposit-email"] === "1"
+  });
   json(res, 202, { ok: true, job_id: job.id, status: job.status });
 }
 
@@ -95,7 +97,7 @@ async function handleShopifyWebhook(req, res) {
   json(res, 202, { ok: true, job_id: job.id, status: job.status });
 }
 
-async function createJobFromOrderPayload(payload, source) {
+async function createJobFromOrderPayload(payload, source, options = {}) {
   if (!isDepositOrder(payload)) {
     return {
       id: null,
@@ -138,7 +140,9 @@ async function createJobFromOrderPayload(payload, source) {
   }
   upsertJob(job);
 
-  await sendEmail({ to: job.customerEmail, ...depositReceived(job) });
+  if (!options.skipDepositEmail) {
+    await sendEmail({ to: job.customerEmail, ...depositReceived(job) });
+  }
 
   if (productRequest) queueResearch(job.id);
   return job;
