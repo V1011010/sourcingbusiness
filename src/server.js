@@ -18,6 +18,7 @@ const server = http.createServer(async (req, res) => {
         jobs: readJobs().length,
         features: {
           shopifyOrderEnrichment: true,
+          safeOrderResearchRetry: true,
           adminJobsEndpoint: Boolean(config.adminStatusSecret)
         }
       });
