@@ -101,6 +101,21 @@ Create a Shopify Flow workflow:
 
 If the Flow body Liquid fields need adjustment in the Shopify editor, keep the same JSON shape and use the fields Flow exposes for your order.
 
+### Recommended Shopify Admin fallback
+
+Shopify Flow does not always pass every line-item custom field in the HTTP action payload. To make paid-deposit automation reliable, configure these Render environment variables so the backend can fetch the full paid order from Shopify before deciding whether to start AI research:
+
+- `SHOPIFY_STORE_DOMAIN` — your `.myshopify.com` domain, for example `kk09qy-xz.myshopify.com`
+- `SHOPIFY_ADMIN_ACCESS_TOKEN` — a custom app Admin API token with `read_orders`
+- `SHOPIFY_ADMIN_API_VERSION` — defaults to `2026-04`
+
+With these set, the webhook can receive only the order ID/name from Flow, fetch the order's line-item custom attributes, extract the product brief, and queue AI supplier research immediately.
+
+Optional diagnostics:
+
+- Set `ARCOVIA_ADMIN_STATUS_SECRET`.
+- Then call `GET /admin/jobs` with header `X-Arcovia-Admin-Secret: <secret>` to see job status, timeline, and whether the product request was captured.
+
 ## Customer brief capture
 
 The fastest version is to add product-detail fields to the deposit product page later. Until then, this backend sends a secure intake link after payment if the order does not include enough detail.

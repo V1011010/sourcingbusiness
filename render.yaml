@@ -11,6 +11,14 @@ services:
         sync: false
       - key: ARCOVIA_FLOW_SECRET
         sync: false
+      - key: SHOPIFY_STORE_DOMAIN
+        sync: false
+      - key: SHOPIFY_ADMIN_ACCESS_TOKEN
+        sync: false
+      - key: SHOPIFY_ADMIN_API_VERSION
+        value: 2026-04
+      - key: ARCOVIA_ADMIN_STATUS_SECRET
+        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL

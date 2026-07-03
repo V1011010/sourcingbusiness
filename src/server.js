@@ -3,6 +3,7 @@ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { config } from "./config.js";
 import { sendEmail } from "./email.js";
 import { queueResearch } from "./research.js";
+import { fetchShopifyOrderDetails } from "./shopify.js";
 import { depositReceived, stageUpdate } from "./templates.js";
 import { addTimeline, getJob, readJobs, upsertJob } from "./storage.js";
 
@@ -16,6 +17,10 @@ const server = http.createServer(async (req, res) => {
         service: "arcovia-ai-sourcing",
         jobs: readJobs().length
       });
+    }
+
+    if (req.method === "GET" && url.pathname === "/admin/jobs") {
+      return handleAdminJobs(req, res);
     }
 
     if (req.method === "POST" && url.pathname === "/flow/order-paid") {
@@ -97,10 +102,11 @@ async function createJobFromOrderPayload(payload, source) {
 
   const orderName = payload.order_name || payload.name || `Order ${payload.order_id || payload.id || "unknown"}`;
   const orderId = String(payload.order_id || payload.id || payload.admin_graphql_api_id || orderName);
-  const existing = readJobs().find((job) => job.orderId === orderId);
-  if (existing) return existing;
+  const existing = readJobs().find((job) => job.orderId === orderId || job.orderName === orderName);
+  const enrichedPayload = await enrichOrderPayload(payload);
+  const productRequest = extractProductRequest(enrichedPayload);
+  if (existing) return updateExistingJobFromOrder(existing, enrichedPayload, productRequest, source);
 
-  const productRequest = extractProductRequest(payload);
   const now = new Date();
   const job = {
     id: randomUUID(),
@@ -108,15 +114,15 @@ async function createJobFromOrderPayload(payload, source) {
     source,
     orderId,
     orderName,
-    customerEmail: payload.email || payload.customer_email || payload.customer?.email || "",
-    customerName: payload.customer_name || payload.customer?.displayName || payload.customer?.first_name || "",
+    customerEmail: enrichedPayload.email || enrichedPayload.customer_email || enrichedPayload.customer?.email || "",
+    customerName: enrichedPayload.customer_name || enrichedPayload.customer?.displayName || enrichedPayload.customer?.first_name || "",
     productRequest,
     status: productRequest ? "researching" : "awaiting_brief",
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     nextUpdateAt: addHours(now, config.updateIntervalHours).toISOString(),
     sourcingWindowEndsAt: addDays(now, config.maxSourcingDays).toISOString(),
-    rawOrder: payload,
+    rawOrder: enrichedPayload,
     timeline: []
   };
 
@@ -132,6 +138,104 @@ async function createJobFromOrderPayload(payload, source) {
 
   if (productRequest) queueResearch(job.id);
   return job;
+}
+
+async function updateExistingJobFromOrder(existing, payload, productRequest, source) {
+  existing.rawOrder = {
+    ...(existing.rawOrder || {}),
+    ...payload
+  };
+
+  if (!existing.productRequest?.trim() && productRequest) {
+    existing.productRequest = productRequest;
+    addTimeline(existing, "brief_captured", `Product brief captured from ${source}.`);
+  }
+
+  if (existing.productRequest?.trim() && ["awaiting_brief", "research_failed"].includes(existing.status)) {
+    existing.status = "researching";
+    addTimeline(existing, "research_requeued", "AI supplier research was queued from the latest paid-order payload.");
+    upsertJob(existing);
+    queueResearch(existing.id);
+    return existing;
+  }
+
+  upsertJob(existing);
+  return existing;
+}
+
+async function enrichOrderPayload(payload) {
+  if (extractProductRequest(payload)) return payload;
+
+  try {
+    const shopifyOrder = await fetchShopifyOrderDetails(payload);
+    if (!shopifyOrder) return payload;
+    return mergeOrderPayload(payload, shopifyOrder);
+  } catch (error) {
+    console.error("Shopify order enrichment failed", error);
+    return payload;
+  }
+}
+
+function mergeOrderPayload(payload, shopifyOrder) {
+  return {
+    ...payload,
+    order_id: payload.order_id || shopifyOrder.order_id,
+    order_name: payload.order_name || shopifyOrder.order_name,
+    email: payload.email || shopifyOrder.email,
+    customer_name: payload.customer_name || shopifyOrder.customer_name,
+    note: payload.note || shopifyOrder.note,
+    customAttributes: [
+      ...(payload.customAttributes || []),
+      ...(shopifyOrder.customAttributes || [])
+    ],
+    line_items: mergeLineItems(normalizeLineItems(payload), shopifyOrder.line_items || [])
+  };
+}
+
+function mergeLineItems(payloadItems, shopifyItems) {
+  if (!payloadItems.length) return shopifyItems;
+
+  return payloadItems.map((item, index) => ({
+    ...(shopifyItems[index] || {}),
+    ...item,
+    properties: [
+      ...((item.properties || []).map((prop) => ({ ...prop }))),
+      ...((shopifyItems[index]?.properties || []).map((prop) => ({ ...prop })))
+    ],
+    customAttributes: [
+      ...((item.customAttributes || []).map((prop) => ({ ...prop }))),
+      ...((shopifyItems[index]?.customAttributes || []).map((prop) => ({ ...prop })))
+    ]
+  }));
+}
+
+function handleAdminJobs(req, res) {
+  if (!config.adminStatusSecret) return json(res, 404, { error: "not_found" });
+  if (req.headers["x-arcovia-admin-secret"] !== config.adminStatusSecret) {
+    return json(res, 401, { error: "invalid_admin_secret" });
+  }
+
+  const jobs = readJobs().map((job) => ({
+    id: job.id,
+    orderId: job.orderId,
+    orderName: job.orderName,
+    customerEmail: job.customerEmail,
+    status: job.status,
+    productRequestPresent: Boolean(job.productRequest?.trim()),
+    supplierCount: job.research?.suppliers?.length || 0,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    researchStartedAt: job.researchStartedAt || null,
+    researchCompletedAt: job.researchCompletedAt || null,
+    timeline: (job.timeline || []).map((event) => ({
+      type: event.type,
+      message: event.message,
+      at: event.at,
+      meta: event.meta || {}
+    }))
+  }));
+
+  json(res, 200, { ok: true, jobs });
 }
 
 function isDepositOrder(payload) {
