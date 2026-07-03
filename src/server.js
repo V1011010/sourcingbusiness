@@ -35,6 +35,14 @@ const server = http.createServer(async (req, res) => {
       return handleAdminJobs(req, res, url);
     }
 
+    if (req.method === "GET" && url.pathname === "/monitor-lite") {
+      return handleMonitorLitePage(req, res);
+    }
+
+    if (req.method === "GET" && url.pathname === "/monitor") {
+      return handleMonitorPage(req, res, url);
+    }
+
     if (req.method === "POST" && url.pathname === "/flow/order-paid") {
       return handleFlowOrderPaid(req, res);
     }
@@ -249,55 +257,280 @@ function handleAdminJobs(req, res, url) {
   }
 
   const details = url.searchParams.get("details") === "1";
-  const jobs = readJobs().map((job) => {
-    const base = {
-      id: job.id,
-      orderId: job.orderId,
-      orderName: job.orderName,
-      customerEmail: job.customerEmail,
-      status: job.status,
-      refundStatus: job.refundStatus || null,
-      refundReason: job.refundReason || null,
-      productRequestPresent: Boolean(job.productRequest?.trim()),
-      supplierCount: job.research?.suppliers?.length || 0,
-      candidateSourceCount: job.research?.candidateSources?.length || 0,
-      rejectedSourceCount: job.research?.rejectedSources?.length || 0,
-      shippingAgentCount: job.research?.shippingAgents?.length || 0,
-      researchAttemptCount: job.researchAttemptCount || 0,
-      maxResearchAttempts: job.maxResearchAttempts || config.deepResearchMaxAttempts,
-      currentResearchAttempt: job.currentResearchAttempt || null,
-      researchRunning: Boolean(job.id && isResearchRunning(job.id)),
-      nextResearchAt: job.nextResearchAt || null,
-      nextUpdateAt: job.nextUpdateAt || null,
-      createdAt: job.createdAt,
-      updatedAt: job.updatedAt,
-      researchStartedAt: job.researchStartedAt || null,
-      researchCompletedAt: job.researchCompletedAt || null,
-      latestAttempt: (job.researchAttempts || []).at(-1) || null,
-      researchSummary: job.research?.summary || null,
-      timeline: (job.timeline || []).map((event) => ({
-        type: event.type,
-        message: event.message,
-        at: event.at,
-        meta: event.meta || {}
-      }))
-    };
-
-    if (!details) return base;
-
-    return {
-      ...base,
-      productRequest: job.productRequest || "",
-      suppliers: job.research?.suppliers || [],
-      candidateSources: job.research?.candidateSources || [],
-      rejectedSources: job.research?.rejectedSources || [],
-      shippingAgents: job.research?.shippingAgents || [],
-      webSources: job.research?.webSources || [],
-      rawResearchPreview: String(job.research?.rawText || "").slice(0, 4000)
-    };
-  });
+  const jobs = readJobs().map((job) => serializeJob(job, details));
 
   json(res, 200, { ok: true, jobs });
+}
+
+function handleMonitorPage(_req, res, url) {
+  const key = url.searchParams.get("key") || "";
+  if (!isValidMonitorKey(key)) {
+    return html(res, 401, monitorLoginHtml());
+  }
+
+  const jobs = readJobs()
+    .map((job) => serializeJob(job, true))
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  const cards = jobs.map((job) => monitorJobCard(job)).join("");
+  const refreshUrl = `/monitor?key=${encodeURIComponent(key)}`;
+
+  return html(res, 200, `<!doctype html>
+<html>
+<head>
+  <title>Arcovia AI monitor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="refresh" content="30" />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: Arial, sans-serif; background:#080406; color:#fff; }
+    header { position:sticky; top:0; z-index:2; padding:18px 16px; background:linear-gradient(135deg,#16080d,#320817); border-bottom:1px solid #6b1024; }
+    main { padding:16px; max-width:980px; margin:0 auto; }
+    h1 { margin:0 0 6px; font-size:24px; }
+    h2 { margin:0 0 8px; font-size:20px; }
+    h3 { margin:18px 0 8px; font-size:16px; color:#ffd7df; }
+    p { line-height:1.45; }
+    a { color:#ffd7df; }
+    .muted { color:#d8b8c0; font-size:14px; }
+    .toolbar { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
+    .button { display:inline-block; text-decoration:none; font-weight:700; color:#fff; background:#7a1028; border:1px solid #bc3456; padding:10px 12px; border-radius:999px; }
+    .grid { display:grid; gap:14px; }
+    .card { border:1px solid #6b1024; background:#16080d; border-radius:18px; padding:16px; box-shadow:0 12px 30px rgba(0,0,0,.25); }
+    .status { display:inline-block; padding:7px 10px; border-radius:999px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; font-size:12px; }
+    .researching { background:#8a5b00; }
+    .human_review { background:#165c35; }
+    .refund_due, .research_failed { background:#7a1028; }
+    .awaiting_brief { background:#4b5563; }
+    .stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:14px 0; }
+    .stat { background:#0f0609; border:1px solid #3a101b; border-radius:14px; padding:12px; }
+    .stat b { display:block; font-size:22px; }
+    .stat span { color:#d8b8c0; font-size:12px; }
+    .timeline { margin:8px 0 0; padding-left:20px; }
+    .timeline li { margin:0 0 10px; color:#ead7dc; }
+    .supplier { border-top:1px solid #3a101b; padding-top:10px; margin-top:10px; }
+    .supplier-title { font-weight:800; }
+    @media (min-width: 760px) { .stats { grid-template-columns:repeat(5,minmax(0,1fr)); } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Arcovia AI monitor</h1>
+    <div class="muted">Auto-refreshes every 30 seconds. Last loaded: ${escapeHtml(formatEventTime(new Date().toISOString()))}</div>
+    <div class="toolbar">
+      <a class="button" href="${escapeHtml(refreshUrl)}">Refresh now</a>
+    </div>
+  </header>
+  <main>
+    ${cards || `<div class="card"><h2>No sourcing jobs yet</h2><p class="muted">When a paid Shopify deposit triggers the AI, it will appear here.</p></div>`}
+  </main>
+</body>
+</html>`);
+}
+
+function handleMonitorLitePage(_req, res) {
+  const jobs = readJobs()
+    .map((job) => serializeJob(job, false))
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  const activeCount = jobs.filter((job) => job.researchRunning).length;
+  const reviewCount = jobs.filter((job) => job.status === "human_review").length;
+  const refundCount = jobs.filter((job) => job.status === "refund_due").length;
+  const cards = jobs.map((job) => monitorLiteJobCard(job)).join("");
+
+  return html(res, 200, `<!doctype html>
+<html>
+<head>
+  <title>Arcovia AI lite monitor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="refresh" content="30" />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: Arial, sans-serif; background:#080406; color:#fff; }
+    header { position:sticky; top:0; z-index:2; padding:18px 16px; background:linear-gradient(135deg,#16080d,#320817); border-bottom:1px solid #6b1024; }
+    main { padding:16px; max-width:860px; margin:0 auto; }
+    h1 { margin:0 0 6px; font-size:24px; }
+    h2 { margin:0 0 8px; font-size:20px; }
+    .muted { color:#d8b8c0; font-size:14px; line-height:1.45; }
+    .grid { display:grid; gap:14px; }
+    .card { border:1px solid #6b1024; background:#16080d; border-radius:18px; padding:16px; box-shadow:0 12px 30px rgba(0,0,0,.25); }
+    .status { display:inline-block; padding:7px 10px; border-radius:999px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; font-size:12px; }
+    .researching { background:#8a5b00; }
+    .human_review { background:#165c35; }
+    .refund_due, .research_failed { background:#7a1028; }
+    .awaiting_brief { background:#4b5563; }
+    .stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:14px 0; }
+    .stat { background:#0f0609; border:1px solid #3a101b; border-radius:14px; padding:12px; }
+    .stat b { display:block; font-size:22px; }
+    .stat span { color:#d8b8c0; font-size:12px; }
+    .banner { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:12px; }
+    @media (min-width: 760px) { .stats { grid-template-columns:repeat(5,minmax(0,1fr)); } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Arcovia AI monitor</h1>
+    <div class="muted">Safe phone view. No customer details or supplier links shown. Auto-refreshes every 30 seconds.</div>
+    <div class="banner">
+      <div class="stat"><b>${escapeHtml(activeCount)}</b><span>AI running</span></div>
+      <div class="stat"><b>${escapeHtml(reviewCount)}</b><span>needs review</span></div>
+      <div class="stat"><b>${escapeHtml(refundCount)}</b><span>refund due</span></div>
+    </div>
+  </header>
+  <main class="grid">
+    ${cards || `<div class="card"><h2>No sourcing jobs yet</h2><p class="muted">When a paid Shopify deposit triggers the AI, it will appear here.</p></div>`}
+  </main>
+</body>
+</html>`);
+}
+
+function serializeJob(job, details = false) {
+  const base = {
+    id: job.id,
+    orderId: job.orderId,
+    orderName: job.orderName,
+    customerEmail: job.customerEmail,
+    customerName: job.customerName || "",
+    status: job.status,
+    refundStatus: job.refundStatus || null,
+    refundReason: job.refundReason || null,
+    productRequestPresent: Boolean(job.productRequest?.trim()),
+    supplierCount: job.research?.suppliers?.length || 0,
+    candidateSourceCount: job.research?.candidateSources?.length || 0,
+    rejectedSourceCount: job.research?.rejectedSources?.length || 0,
+    shippingAgentCount: job.research?.shippingAgents?.length || 0,
+    researchAttemptCount: job.researchAttemptCount || 0,
+    maxResearchAttempts: job.maxResearchAttempts || config.deepResearchMaxAttempts,
+    currentResearchAttempt: job.currentResearchAttempt || null,
+    researchRunning: Boolean(job.id && isResearchRunning(job.id)),
+    nextResearchAt: job.nextResearchAt || null,
+    nextUpdateAt: job.nextUpdateAt || null,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    researchStartedAt: job.researchStartedAt || null,
+    researchCompletedAt: job.researchCompletedAt || null,
+    latestAttempt: (job.researchAttempts || []).at(-1) || null,
+    researchSummary: job.research?.summary || null,
+    timeline: (job.timeline || []).map((event) => ({
+      type: event.type,
+      message: event.message,
+      at: event.at,
+      meta: event.meta || {}
+    }))
+  };
+
+  if (!details) return base;
+
+  return {
+    ...base,
+    productRequest: job.productRequest || "",
+    suppliers: job.research?.suppliers || [],
+    candidateSources: job.research?.candidateSources || [],
+    rejectedSources: job.research?.rejectedSources || [],
+    shippingAgents: job.research?.shippingAgents || [],
+    webSources: job.research?.webSources || [],
+    rawResearchPreview: String(job.research?.rawText || "").slice(0, 4000)
+  };
+}
+
+function isValidMonitorKey(key) {
+  if (!key) return false;
+  return Boolean(
+    (config.adminStatusSecret && key === config.adminStatusSecret)
+    || (config.flowSecret && key === config.flowSecret)
+  );
+}
+
+function monitorLoginHtml() {
+  return `<!doctype html>
+<html>
+<head>
+  <title>Arcovia AI monitor login</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: Arial, sans-serif; background:#080406; color:#fff; margin:0; padding:22px; }
+    main { max-width:520px; margin:0 auto; background:#16080d; border:1px solid #6b1024; padding:22px; border-radius:18px; }
+    input, button { width:100%; padding:14px; border-radius:12px; border:1px solid #6b1024; margin:8px 0; font-size:16px; }
+    input { background:#0f0609; color:#fff; }
+    button { background:#7a1028; color:#fff; font-weight:800; }
+    .muted { color:#d8b8c0; line-height:1.5; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Arcovia AI monitor</h1>
+    <p class="muted">Enter the private monitor key, or use the saved phone link.</p>
+    <form method="GET" action="/monitor">
+      <input name="key" placeholder="Private monitor key" autocomplete="off" />
+      <button type="submit">Open monitor</button>
+    </form>
+  </main>
+</body>
+</html>`;
+}
+
+function monitorJobCard(job) {
+  const timeline = (job.timeline || []).slice(-6).reverse().map((event) => {
+    return `<li><strong>${escapeHtml(formatEventTime(event.at))}</strong><br>${escapeHtml(event.message)}</li>`;
+  }).join("");
+  const suppliers = (job.suppliers || []).slice(0, 5).map((supplier, index) => {
+    return `<div class="supplier">
+      <div class="supplier-title">${escapeHtml(index + 1)}. ${escapeHtml(supplier.name || "Unnamed source")}</div>
+      <div class="muted">${escapeHtml(supplier.price || "Price not listed")} · Trust ${escapeHtml(supplier.trust_score ?? "n/a")} · ${escapeHtml(supplier.risk_level || "risk n/a")}</div>
+      ${supplier.url ? `<a href="${escapeHtml(supplier.url)}" target="_blank" rel="noreferrer">Open supplier/source</a>` : ""}
+    </div>`;
+  }).join("");
+  const nextLine = job.nextResearchAt ? `<p class="muted">Next AI check: ${escapeHtml(formatEventTime(job.nextResearchAt))}</p>` : "";
+  const completedLine = job.researchCompletedAt ? `<p class="muted">Research completed: ${escapeHtml(formatEventTime(job.researchCompletedAt))}</p>` : "";
+  const runningLine = job.researchRunning
+    ? `<p><strong>AI is working right now.</strong> Keep this page open; it refreshes automatically.</p>`
+    : `<p class="muted">AI is not currently running for this order.</p>`;
+
+  return `<section class="card">
+    <h2>${escapeHtml(job.orderName || "Unknown order")}</h2>
+    <span class="status ${escapeHtml(statusClass(job.status))}">${escapeHtml(statusLabel(job.status))}</span>
+    <p class="muted">${escapeHtml(job.customerName || "Customer")} ${job.customerEmail ? `· ${escapeHtml(job.customerEmail)}` : ""}</p>
+    ${runningLine}
+    <div class="stats">
+      <div class="stat"><b>${escapeHtml(`${job.researchAttemptCount}/${job.maxResearchAttempts}`)}</b><span>checks</span></div>
+      <div class="stat"><b>${escapeHtml(job.supplierCount)}</b><span>trusted suppliers</span></div>
+      <div class="stat"><b>${escapeHtml(job.candidateSourceCount)}</b><span>candidates</span></div>
+      <div class="stat"><b>${escapeHtml(job.rejectedSourceCount)}</b><span>rejected</span></div>
+      <div class="stat"><b>${escapeHtml(job.shippingAgentCount)}</b><span>shipping agents</span></div>
+    </div>
+    ${nextLine}
+    ${completedLine}
+    ${job.researchSummary ? `<h3>Research summary</h3><p class="muted">${escapeHtml(job.researchSummary)}</p>` : ""}
+    ${suppliers ? `<h3>Top supplier/source leads</h3>${suppliers}` : ""}
+    <h3>Latest activity</h3>
+    <ul class="timeline">${timeline || "<li>No activity yet.</li>"}</ul>
+  </section>`;
+}
+
+function monitorLiteJobCard(job) {
+  const nextLine = job.nextResearchAt ? `<p class="muted">Next AI check: ${escapeHtml(formatEventTime(job.nextResearchAt))}</p>` : "";
+  const completedLine = job.researchCompletedAt ? `<p class="muted">Completed: ${escapeHtml(formatEventTime(job.researchCompletedAt))}</p>` : "";
+  const runningLine = job.researchRunning
+    ? `<p><strong>AI is working right now.</strong></p>`
+    : `<p class="muted">AI is not currently running for this order.</p>`;
+
+  return `<section class="card">
+    <h2>${escapeHtml(job.orderName || "Latest order")}</h2>
+    <span class="status ${escapeHtml(statusClass(job.status))}">${escapeHtml(statusLabel(job.status))}</span>
+    ${runningLine}
+    <div class="stats">
+      <div class="stat"><b>${escapeHtml(`${job.researchAttemptCount}/${job.maxResearchAttempts}`)}</b><span>checks</span></div>
+      <div class="stat"><b>${escapeHtml(job.supplierCount)}</b><span>trusted suppliers</span></div>
+      <div class="stat"><b>${escapeHtml(job.candidateSourceCount)}</b><span>candidates</span></div>
+      <div class="stat"><b>${escapeHtml(job.rejectedSourceCount)}</b><span>rejected</span></div>
+      <div class="stat"><b>${escapeHtml(job.shippingAgentCount)}</b><span>shipping agents</span></div>
+    </div>
+    ${nextLine}
+    ${completedLine}
+  </section>`;
+}
+
+function statusClass(status) {
+  return String(status || "unknown").replace(/[^a-z0-9_-]/gi, "_");
 }
 
 function isDepositOrder(payload) {
