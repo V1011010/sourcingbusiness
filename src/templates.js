@@ -54,6 +54,7 @@ export function stageUpdate(job) {
     researching: "We are still searching across online stores, physical stores, marketplaces, suppliers, distributors, reviews, complaint sites, social signals, and shipping options.",
     vetting: "We have found possible suppliers and are checking authenticity, reviews, complaint history, and social presence.",
     human_review: "A supplier shortlist is under internal review before we send you a quote or recommendation.",
+    supplier_selected: "Arcovia has selected a supplier/source for internal follow-up. We will confirm the final quote and next steps before any purchase is made.",
     quote_ready: "Your sourcing result is ready. Arcovia will contact you with the quote and next steps.",
     no_match: "We have not found a trustworthy match yet. If we cannot find one within the sourcing window, the refundable-deposit rule applies.",
     refund_due: "We could not verify a trustworthy source after the agreed sourcing checks. Your refundable deposit is now marked for refund processing."

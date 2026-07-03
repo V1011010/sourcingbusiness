@@ -43,6 +43,10 @@ const server = http.createServer(async (req, res) => {
       return handleMonitorPage(req, res, url);
     }
 
+    if (req.method === "POST" && url.pathname === "/monitor/select-supplier") {
+      return handleSelectSupplier(req, res);
+    }
+
     if (req.method === "POST" && url.pathname === "/flow/order-paid") {
       return handleFlowOrderPaid(req, res);
     }
@@ -271,7 +275,7 @@ function handleMonitorPage(_req, res, url) {
   const jobs = readJobs()
     .map((job) => serializeJob(job, true))
     .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
-  const cards = jobs.map((job) => monitorJobCard(job)).join("");
+  const cards = jobs.map((job) => monitorJobCard(job, key)).join("");
   const refreshUrl = `/monitor?key=${encodeURIComponent(key)}`;
 
   return html(res, 200, `<!doctype html>
@@ -325,6 +329,39 @@ function handleMonitorPage(_req, res, url) {
   </main>
 </body>
 </html>`);
+}
+
+async function handleSelectSupplier(req, res) {
+  const body = await readBody(req);
+  const form = new URLSearchParams(body);
+  const key = String(form.get("key") || "");
+  if (!isValidMonitorKey(key)) {
+    return html(res, 401, monitorLoginHtml());
+  }
+
+  const jobId = String(form.get("job_id") || "");
+  const supplierIndex = Number(form.get("supplier_index"));
+  const job = getJob(jobId);
+  const supplier = job?.research?.suppliers?.[supplierIndex];
+  if (!job || !supplier) {
+    return html(res, 404, "<h1>Supplier not found</h1><p>Go back to the monitor and refresh.</p>");
+  }
+
+  job.selectedSupplier = {
+    index: supplierIndex,
+    selectedAt: new Date().toISOString(),
+    supplier
+  };
+  job.status = "supplier_selected";
+  job.nextUpdateAt = null;
+  addTimeline(job, "supplier_selected", `Arcovia selected supplier/source: ${supplier.name || "Unnamed source"}.`, {
+    supplierIndex,
+    supplierName: supplier.name || "",
+    supplierUrl: supplier.url || ""
+  });
+  upsertJob(job);
+
+  return redirect(res, `/monitor?key=${encodeURIComponent(key)}#${encodeURIComponent(job.id)}`);
 }
 
 function handleMonitorLitePage(_req, res) {
@@ -393,6 +430,7 @@ function serializeJob(job, details = false) {
     status: job.status,
     refundStatus: job.refundStatus || null,
     refundReason: job.refundReason || null,
+    selectedSupplier: job.selectedSupplier || null,
     productRequestPresent: Boolean(job.productRequest?.trim()),
     supplierCount: job.research?.suppliers?.length || 0,
     candidateSourceCount: job.research?.candidateSources?.length || 0,
@@ -468,15 +506,31 @@ function monitorLoginHtml() {
 </html>`;
 }
 
-function monitorJobCard(job) {
+function monitorJobCard(job, key) {
   const timeline = (job.timeline || []).slice(-6).reverse().map((event) => {
     return `<li><strong>${escapeHtml(formatEventTime(event.at))}</strong><br>${escapeHtml(event.message)}</li>`;
   }).join("");
-  const suppliers = (job.suppliers || []).slice(0, 5).map((supplier, index) => {
+  const selected = job.selectedSupplier?.supplier;
+  const selectedHtml = selected ? `<div class="supplier" style="border-color:#2f8f58;background:#0d2116;">
+      <div class="supplier-title">Selected supplier: ${escapeHtml(selected.name || "Unnamed source")}</div>
+      <div class="muted">${escapeHtml(selected.price || "Price not listed")} · Trust ${escapeHtml(selected.trust_score ?? "n/a")} · ${escapeHtml(selected.risk_level || "risk n/a")}</div>
+      ${selected.url ? `<a href="${escapeHtml(selected.url)}" target="_blank" rel="noreferrer">Open selected supplier/source</a>` : ""}
+    </div>` : "";
+  const suppliers = (job.suppliers || []).slice(0, 8).map((supplier, index) => {
+    const alreadySelected = job.selectedSupplier?.index === index;
     return `<div class="supplier">
       <div class="supplier-title">${escapeHtml(index + 1)}. ${escapeHtml(supplier.name || "Unnamed source")}</div>
       <div class="muted">${escapeHtml(supplier.price || "Price not listed")} · Trust ${escapeHtml(supplier.trust_score ?? "n/a")} · ${escapeHtml(supplier.risk_level || "risk n/a")}</div>
+      ${supplier.estimated_total_to_customer ? `<div class="muted">Estimated total: ${escapeHtml(supplier.estimated_total_to_customer)}</div>` : ""}
+      ${supplier.availability ? `<div class="muted">Availability: ${escapeHtml(supplier.availability)}</div>` : ""}
+      ${supplier.product_match ? `<p class="muted">${escapeHtml(supplier.product_match)}</p>` : ""}
       ${supplier.url ? `<a href="${escapeHtml(supplier.url)}" target="_blank" rel="noreferrer">Open supplier/source</a>` : ""}
+      <form method="POST" action="/monitor/select-supplier" style="margin-top:10px;">
+        <input type="hidden" name="key" value="${escapeHtml(key)}" />
+        <input type="hidden" name="job_id" value="${escapeHtml(job.id)}" />
+        <input type="hidden" name="supplier_index" value="${escapeHtml(index)}" />
+        <button class="button" type="submit">${alreadySelected ? "Selected" : "Choose this supplier"}</button>
+      </form>
     </div>`;
   }).join("");
   const nextLine = job.nextResearchAt ? `<p class="muted">Next AI check: ${escapeHtml(formatEventTime(job.nextResearchAt))}</p>` : "";
@@ -500,6 +554,7 @@ function monitorJobCard(job) {
     ${nextLine}
     ${completedLine}
     ${job.researchSummary ? `<h3>Research summary</h3><p class="muted">${escapeHtml(job.researchSummary)}</p>` : ""}
+    ${selectedHtml}
     ${suppliers ? `<h3>Top supplier/source leads</h3>${suppliers}` : ""}
     <h3>Latest activity</h3>
     <ul class="timeline">${timeline || "<li>No activity yet.</li>"}</ul>
@@ -1018,7 +1073,7 @@ async function sendDueUpdates() {
   for (const job of jobs) {
     if (!job.nextUpdateAt) continue;
     if (new Date(job.nextUpdateAt) > now) continue;
-    if (["quote_ready", "cancelled", "refunded", "refund_due"].includes(job.status)) continue;
+    if (["supplier_selected", "quote_ready", "cancelled", "refunded", "refund_due"].includes(job.status)) continue;
 
     const sourcingWindowEndsAt = job.sourcingWindowEndsAt;
     if (sourcingWindowEndsAt && new Date(sourcingWindowEndsAt) <= now && !["human_review", "quote_ready"].includes(job.status)) {
@@ -1067,6 +1122,11 @@ function json(res, status, data) {
 function html(res, status, content) {
   res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
   res.end(content);
+}
+
+function redirect(res, location) {
+  res.writeHead(303, { Location: location });
+  res.end();
 }
 
 function addHours(date, hours) {
@@ -1128,6 +1188,7 @@ function statusLabel(status) {
     researching: "Searching for product",
     vetting: "Checking suppliers",
     human_review: "Supplier research under review",
+    supplier_selected: "Supplier selected",
     quote_ready: "Quote ready",
     no_match: "No match found yet",
     refund_due: "Refund due",
