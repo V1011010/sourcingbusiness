@@ -67,6 +67,7 @@ async function performSupplierResearch(job) {
     },
     body: JSON.stringify({
       model: config.openaiModel,
+      max_output_tokens: config.openaiMaxOutputTokens,
       tools: [{ type: "web_search" }],
       tool_choice: "required",
       include: ["web_search_call.action.sources"],
@@ -102,10 +103,10 @@ Order: ${job.orderName}
 Customer budget and sourcing preferences may be inside the request. If important details are missing, say what is missing.
 
 Task:
-Find trustworthy suppliers for this product. Do deep public-source research before recommending any supplier.
+Find up to 3 trustworthy suppliers for this product. Do focused public-source research before recommending any supplier.
 
 Research requirements:
-- Search broad web results and supplier/product pages.
+- Search web results and supplier/product pages.
 - Check customer reviews and complaints.
 - Check HelloPeter mentions where relevant, especially for South African suppliers.
 - Check social media presence or absence where relevant.
@@ -147,7 +148,9 @@ Return only valid JSON in this shape:
     }
   ],
   "recommended_next_customer_message": "safe short status message, no unverified supplier details"
-}`;
+}
+
+Keep the JSON compact. Prefer concise evidence summaries over long paragraphs.`;
 }
 
 function dryRunResearch(job) {

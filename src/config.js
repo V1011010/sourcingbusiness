@@ -29,6 +29,7 @@ export const config = {
   shopifyAdminApiVersion: process.env.SHOPIFY_ADMIN_API_VERSION || "2026-04",
   openaiApiKey: process.env.OPENAI_API_KEY || "",
   openaiModel: process.env.OPENAI_MODEL || "gpt-5.5",
+  openaiMaxOutputTokens: Number(process.env.OPENAI_MAX_OUTPUT_TOKENS || 1800),
   resendApiKey: process.env.RESEND_API_KEY || "",
   fromEmail: process.env.FROM_EMAIL || "Arcovia <updates@arcovia.africa>",
   adminEmail: process.env.ADMIN_EMAIL || "vutlharingobeni5@gmail.com",

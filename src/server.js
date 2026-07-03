@@ -19,6 +19,7 @@ const server = http.createServer(async (req, res) => {
         features: {
           shopifyOrderEnrichment: true,
           safeOrderResearchRetry: true,
+          cappedOpenAIResearchTokens: true,
           adminJobsEndpoint: Boolean(config.adminStatusSecret || config.flowSecret)
         }
       });
