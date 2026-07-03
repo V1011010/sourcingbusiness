@@ -101,7 +101,7 @@ Steps:
 4. Add a condition that the order line item SKU equals:
 
 ```text
-ARC-SOURCE-250
+ARC-DEPOSIT-250
 ```
 
 5. Add action: **Add order tags**:
@@ -139,7 +139,15 @@ X-Arcovia-Flow-Secret: YOUR_LONG_RANDOM_SECRET
     {% for lineItem in order.lineItems %}
     {
       "title": "{{lineItem.title}}",
-      "sku": "{{lineItem.sku}}"
+      "sku": "{{lineItem.sku}}",
+      "properties": [
+        {% for attribute in lineItem.customAttributes %}
+        {
+          "name": "{{attribute.key}}",
+          "value": "{{attribute.value}}"
+        }{% unless forloop.last %},{% endunless %}
+        {% endfor %}
+      ]
     }{% unless forloop.last %},{% endunless %}
     {% endfor %}
   ]
@@ -189,7 +197,7 @@ FROM_EMAIL=Arcovia <updates@arcovia.africa>
 ADMIN_EMAIL=vutlharingobeni5@gmail.com
 UPDATE_INTERVAL_HOURS=6
 MAX_SOURCING_DAYS=14
-DEPOSIT_SKU=ARC-SOURCE-250
+DEPOSIT_SKU=ARC-DEPOSIT-250
 ```
 
 ## Testing before real customers
@@ -213,6 +221,7 @@ Then create a test Shopify order for the R250 deposit, pay using your payment te
 - Shopify Flow ran
 - backend job was created
 - customer received the first email
+- the customer email includes a `/status/...` tracking link
 - admin received the supplier report
 
 ## Manual approval rule

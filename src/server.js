@@ -1,6 +1,5 @@
 import http from "node:http";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import { parse as parseUrl } from "node:url";
 import { config } from "./config.js";
 import { sendEmail } from "./email.js";
 import { queueResearch } from "./research.js";
@@ -9,7 +8,7 @@ import { addTimeline, getJob, readJobs, upsertJob } from "./storage.js";
 
 const server = http.createServer(async (req, res) => {
   try {
-    const url = parseUrl(req.url, true);
+    const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
     if (req.method === "GET" && url.pathname === "/health") {
       return json(res, 200, {
@@ -33,6 +32,10 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname?.startsWith("/brief/")) {
       return handleBriefSubmit(req, res, url.pathname.split("/").pop());
+    }
+
+    if (req.method === "GET" && url.pathname?.startsWith("/status/")) {
+      return handleStatusPage(req, res, url.pathname.split("/").pop());
     }
 
     json(res, 404, { error: "not_found" });
@@ -107,6 +110,11 @@ async function createJobFromOrderPayload(payload, source) {
   };
 
   addTimeline(job, "job_created", `Sourcing job created from ${source}.`);
+  if (productRequest) {
+    addTimeline(job, "brief_captured", "Product brief captured from the paid Shopify order.");
+  } else {
+    addTimeline(job, "awaiting_brief", "Paid order received, but no product brief was attached to the order.");
+  }
   upsertJob(job);
 
   await sendEmail({ to: job.customerEmail, ...depositReceived(job) });
@@ -116,22 +124,35 @@ async function createJobFromOrderPayload(payload, source) {
 }
 
 function isDepositOrder(payload) {
-  const lineItems = payload.line_items || payload.lineItems || [];
+  const lineItems = normalizeLineItems(payload);
   if (!Array.isArray(lineItems) || lineItems.length === 0) return true;
-  return lineItems.some((item) => String(item.sku || item.SKU || "").trim() === config.depositSku);
+  return lineItems.some((item) => {
+    const sku = String(item.sku || item.SKU || "").trim();
+    const title = String(item.title || item.name || "").toLowerCase();
+    const handle = String(item.product?.handle || item.product_handle || item.productHandle || "").toLowerCase();
+    return config.depositSkus.includes(sku)
+      || handle === "arcovia-sourcing-deposit"
+      || handle === "product-sourcing-deposit"
+      || (title.includes("sourcing") && title.includes("deposit"));
+  });
 }
 
 function extractProductRequest(payload) {
+  const lineItems = normalizeLineItems(payload);
   const candidates = [
     payload.product_request,
     payload.sourcing_brief,
     payload.note,
     payload.customer_note,
+    payload.customerNote,
     ...(payload.note_attributes || []).map((item) => `${item.name}: ${item.value}`),
-    ...(payload.line_items || []).flatMap((item) => [
+    ...(payload.customAttributes || []).map((item) => `${item.key || item.name}: ${item.value}`),
+    ...lineItems.flatMap((item) => [
       item.product_request,
+      item.productRequest,
       item.note,
-      ...(item.properties || []).map((prop) => `${prop.name}: ${prop.value}`)
+      ...(item.properties || []).map((prop) => `${prop.name || prop.key}: ${prop.value}`),
+      ...(item.customAttributes || []).map((prop) => `${prop.key || prop.name}: ${prop.value}`)
     ])
   ];
 
@@ -141,6 +162,16 @@ function extractProductRequest(payload) {
     .filter((value) => value && value.toLowerCase() !== "null" && value.toLowerCase() !== "undefined")
     .join("\n")
     .trim();
+}
+
+function normalizeLineItems(payload) {
+  if (Array.isArray(payload.line_items)) return payload.line_items;
+  if (Array.isArray(payload.lineItems)) return payload.lineItems;
+  if (Array.isArray(payload.line_items?.nodes)) return payload.line_items.nodes;
+  if (Array.isArray(payload.lineItems?.nodes)) return payload.lineItems.nodes;
+  if (payload.line_items?.edges) return payload.line_items.edges.map((edge) => edge.node).filter(Boolean);
+  if (payload.lineItems?.edges) return payload.lineItems.edges.map((edge) => edge.node).filter(Boolean);
+  return [];
 }
 
 const CATEGORY_CONFIG = {
@@ -525,6 +556,46 @@ async function handleBriefSubmit(req, res, token) {
   html(res, 200, "<h1>Brief received</h1><p>Arcovia has started the supplier search. You will receive updates by email.</p>");
 }
 
+async function handleStatusPage(_req, res, token) {
+  const job = getJob(token);
+  if (!job) return html(res, 404, "<h1>Status link not found</h1>");
+  const timeline = (job.timeline || []).slice().reverse().map((event) => {
+    return `<li><strong>${escapeHtml(formatEventTime(event.at))}</strong><br>${escapeHtml(event.message)}</li>`;
+  }).join("");
+  const researchSummary = job.research?.summary
+    ? `<section><h2>Internal research summary</h2><p>${escapeHtml(job.research.summary)}</p><p class="muted">Arcovia reviews supplier evidence before any supplier details or quote is sent to you.</p></section>`
+    : "";
+
+  html(res, 200, `<!doctype html>
+<html>
+<head>
+  <title>Arcovia sourcing status</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: Arial, sans-serif; background:#080406; color:#fff; margin:0; padding:24px; }
+    main { max-width:760px; margin:0 auto; background:#16080d; border:1px solid #6b1024; padding:24px; border-radius:16px; }
+    h1 { margin-top:0; }
+    .badge { display:inline-block; margin:8px 0 18px; padding:8px 12px; border-radius:999px; background:#7a1028; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+    .muted { color:#d8b8c0; line-height:1.5; }
+    ul { padding-left:22px; }
+    li { margin:0 0 16px; line-height:1.45; }
+    a { color:#ffc4d0; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Arcovia sourcing status</h1>
+    <div class="badge">${escapeHtml(statusLabel(job.status))}</div>
+    <p class="muted">Order: ${escapeHtml(job.orderName)}<br>Created: ${escapeHtml(formatEventTime(job.createdAt))}<br>Sourcing window ends: ${escapeHtml(formatEventTime(job.sourcingWindowEndsAt))}</p>
+    ${job.status === "awaiting_brief" ? `<p><a href="${escapeHtml(briefLinkForStatus(job))}">Complete your product brief</a> so the AI can start searching.</p>` : ""}
+    ${researchSummary}
+    <h2>Timeline</h2>
+    <ul>${timeline || "<li>No timeline entries yet.</li>"}</ul>
+  </main>
+</body>
+</html>`);
+}
+
 async function sendDueUpdates() {
   const now = new Date();
   const jobs = readJobs();
@@ -602,4 +673,26 @@ function fieldLine(label, value) {
 
 function scriptJson(value) {
   return JSON.stringify(value).replaceAll("<", "\\u003c");
+}
+
+function briefLinkForStatus(job) {
+  return `${config.publicBaseUrl.replace(/\/$/, "")}/brief/${job.publicToken}`;
+}
+
+function formatEventTime(value) {
+  if (!value) return "n/a";
+  return new Date(value).toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg" });
+}
+
+function statusLabel(status) {
+  const labels = {
+    awaiting_brief: "Waiting for product details",
+    researching: "Searching for product",
+    vetting: "Checking suppliers",
+    human_review: "Supplier research under review",
+    quote_ready: "Quote ready",
+    no_match: "No match found yet",
+    research_failed: "Research needs attention"
+  };
+  return labels[status] || String(status || "In progress").replaceAll("_", " ");
 }

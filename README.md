@@ -61,12 +61,14 @@ Dry-run test:
 node scripts/dry-run-paid-order.js
 ```
 
+The dry-run test intentionally uses a blank customer email and no product brief, so it verifies job creation and status-page handling without sending real email or starting paid AI research.
+
 ## Shopify Flow setup
 
 Create a Shopify Flow workflow:
 
 1. Trigger: **Order paid**
-2. Condition: order contains the deposit product/SKU `ARC-SOURCE-250`
+2. Condition: order contains the deposit product/SKU `ARC-DEPOSIT-250`
 3. Action: **Add order tags**
    - `arcovia-ai-sourcing`
    - `sourcing-started`

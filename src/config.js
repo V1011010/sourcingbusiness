@@ -33,5 +33,8 @@ export const config = {
   maxSourcingDays: Number(process.env.MAX_SOURCING_DAYS || 14),
   highTrustThreshold: Number(process.env.HIGH_TRUST_THRESHOLD || 75),
   mediumTrustThreshold: Number(process.env.MEDIUM_TRUST_THRESHOLD || 60),
-  depositSku: process.env.DEPOSIT_SKU || "ARC-SOURCE-250"
+  depositSkus: (process.env.DEPOSIT_SKU || "ARC-DEPOSIT-250,ARC-SOURCE-250")
+    .split(",")
+    .map((sku) => sku.trim())
+    .filter(Boolean)
 };

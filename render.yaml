@@ -26,4 +26,4 @@ services:
       - key: MAX_SOURCING_DAYS
         value: "14"
       - key: DEPOSIT_SKU
-        value: ARC-SOURCE-250
+        value: ARC-DEPOSIT-250,ARC-SOURCE-250

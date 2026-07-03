@@ -4,6 +4,10 @@ export function briefLink(job) {
   return `${config.publicBaseUrl.replace(/\/$/, "")}/brief/${job.publicToken}`;
 }
 
+export function statusLink(job) {
+  return `${config.publicBaseUrl.replace(/\/$/, "")}/status/${job.publicToken}`;
+}
+
 export function depositReceived(job) {
   if (job.productRequest?.trim()) {
     return {
@@ -15,6 +19,9 @@ We received your R250 sourcing deposit and the AI sourcing process has started.
 Current stage: searching for possible suppliers and product matches.
 
 We will update you regularly as we search, review suppliers, and check trust signals.
+
+Track the status here:
+${statusLink(job)}
 
 Order: ${job.orderName}
 
@@ -30,6 +37,9 @@ We received your R250 sourcing deposit for ${job.orderName}.
 
 Before the AI can start the supplier search, please send the product details here:
 ${briefLink(job)}
+
+You can track the status here:
+${statusLink(job)}
 
 Please include your contact details, item category, exact item name, condition, budget, and any category-specific details, reference links, or photos.
 
@@ -57,6 +67,9 @@ Update on your product search:
 ${stageMessages[status] || stageMessages.researching}
 
 We check supplier trust before recommending anything, including customer reviews, complaint signals, social presence, website/payment risk, and consistency of product claims.
+
+Track the status here:
+${statusLink(job)}
 
 Order: ${job.orderName}
 
