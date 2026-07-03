@@ -47,6 +47,14 @@ const server = http.createServer(async (req, res) => {
       return handleSelectSupplier(req, res);
     }
 
+    if (req.method === "GET" && url.pathname?.startsWith("/review/")) {
+      return handleReviewPage(req, res, url.pathname.split("/").pop());
+    }
+
+    if (req.method === "POST" && url.pathname === "/review/select-supplier") {
+      return handleReviewSelectSupplier(req, res);
+    }
+
     if (req.method === "POST" && url.pathname === "/flow/order-paid") {
       return handleFlowOrderPaid(req, res);
     }
@@ -139,6 +147,7 @@ async function createJobFromOrderPayload(payload, source, options = {}) {
   const job = {
     id: randomUUID(),
     publicToken: randomUUID(),
+    reviewToken: randomUUID(),
     source,
     orderId,
     orderName,
@@ -173,6 +182,7 @@ async function createJobFromOrderPayload(payload, source, options = {}) {
 }
 
 async function updateExistingJobFromOrder(existing, payload, productRequest, source, options = {}) {
+  existing.reviewToken ||= randomUUID();
   existing.rawOrder = {
     ...(existing.rawOrder || {}),
     ...payload
@@ -269,13 +279,13 @@ function handleAdminJobs(req, res, url) {
 function handleMonitorPage(_req, res, url) {
   const key = url.searchParams.get("key") || "";
   if (!isValidMonitorKey(key)) {
-    return html(res, 401, monitorLoginHtml());
+    return redirect(res, "/monitor-lite");
   }
 
   const jobs = readJobs()
     .map((job) => serializeJob(job, true))
     .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
-  const cards = jobs.map((job) => monitorJobCard(job, key)).join("");
+  const cards = jobs.map((job) => monitorJobCard(job, { key })).join("");
   const refreshUrl = `/monitor?key=${encodeURIComponent(key)}`;
 
   return html(res, 200, `<!doctype html>
@@ -302,7 +312,7 @@ function handleMonitorPage(_req, res, url) {
     .card { border:1px solid #6b1024; background:#16080d; border-radius:18px; padding:16px; box-shadow:0 12px 30px rgba(0,0,0,.25); }
     .status { display:inline-block; padding:7px 10px; border-radius:999px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; font-size:12px; }
     .researching { background:#8a5b00; }
-    .human_review { background:#165c35; }
+    .human_review, .supplier_selected { background:#165c35; }
     .refund_due, .research_failed { background:#7a1028; }
     .awaiting_brief { background:#4b5563; }
     .stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:14px 0; }
@@ -331,6 +341,62 @@ function handleMonitorPage(_req, res, url) {
 </html>`);
 }
 
+function handleReviewPage(_req, res, token) {
+  const job = getJobByReviewToken(token);
+  if (!job) {
+    return html(res, 404, `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Review link not found</title></head><body><h1>Review link not found</h1><p>This supplier review link is not active. Ask Arcovia to generate a fresh link.</p></body></html>`);
+  }
+
+  const serializedJob = serializeJob(job, true);
+  const card = monitorJobCard(serializedJob, { reviewToken: token, hideCustomer: true });
+
+  return html(res, 200, `<!doctype html>
+<html>
+<head>
+  <title>Arcovia supplier review</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="refresh" content="30" />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: Arial, sans-serif; background:#080406; color:#fff; }
+    header { position:sticky; top:0; z-index:2; padding:18px 16px; background:linear-gradient(135deg,#16080d,#320817); border-bottom:1px solid #6b1024; }
+    main { padding:16px; max-width:980px; margin:0 auto; }
+    h1 { margin:0 0 6px; font-size:24px; }
+    h2 { margin:0 0 8px; font-size:20px; }
+    h3 { margin:18px 0 8px; font-size:16px; color:#ffd7df; }
+    p { line-height:1.45; }
+    a { color:#ffd7df; }
+    button { cursor:pointer; }
+    .muted { color:#d8b8c0; font-size:14px; }
+    .button { display:inline-block; text-decoration:none; font-weight:700; color:#fff; background:#7a1028; border:1px solid #bc3456; padding:10px 12px; border-radius:999px; }
+    .card { border:1px solid #6b1024; background:#16080d; border-radius:18px; padding:16px; box-shadow:0 12px 30px rgba(0,0,0,.25); }
+    .status { display:inline-block; padding:7px 10px; border-radius:999px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; font-size:12px; }
+    .researching { background:#8a5b00; }
+    .human_review, .supplier_selected { background:#165c35; }
+    .refund_due, .research_failed { background:#7a1028; }
+    .awaiting_brief { background:#4b5563; }
+    .stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:14px 0; }
+    .stat { background:#0f0609; border:1px solid #3a101b; border-radius:14px; padding:12px; }
+    .stat b { display:block; font-size:22px; }
+    .stat span { color:#d8b8c0; font-size:12px; }
+    .timeline { margin:8px 0 0; padding-left:20px; }
+    .timeline li { margin:0 0 10px; color:#ead7dc; }
+    .supplier { border-top:1px solid #3a101b; padding-top:10px; margin-top:10px; }
+    .supplier-title { font-weight:800; }
+    @media (min-width: 760px) { .stats { grid-template-columns:repeat(5,minmax(0,1fr)); } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Supplier review</h1>
+    <div class="muted">No password needed. Do not share this link outside Arcovia.</div>
+  </header>
+  <main>${card}</main>
+</body>
+</html>`);
+}
+
 async function handleSelectSupplier(req, res) {
   const body = await readBody(req);
   const form = new URLSearchParams(body);
@@ -347,6 +413,27 @@ async function handleSelectSupplier(req, res) {
     return html(res, 404, "<h1>Supplier not found</h1><p>Go back to the monitor and refresh.</p>");
   }
 
+  markSupplierSelected(job, supplier, supplierIndex);
+
+  return redirect(res, `/monitor?key=${encodeURIComponent(key)}#${encodeURIComponent(job.id)}`);
+}
+
+async function handleReviewSelectSupplier(req, res) {
+  const body = await readBody(req);
+  const form = new URLSearchParams(body);
+  const reviewToken = String(form.get("review_token") || "");
+  const supplierIndex = Number(form.get("supplier_index"));
+  const job = getJobByReviewToken(reviewToken);
+  const supplier = job?.research?.suppliers?.[supplierIndex];
+  if (!job || !supplier) {
+    return html(res, 404, "<h1>Supplier not found</h1><p>Go back to the review link and refresh.</p>");
+  }
+
+  markSupplierSelected(job, supplier, supplierIndex);
+  return redirect(res, `/review/${encodeURIComponent(reviewToken)}`);
+}
+
+function markSupplierSelected(job, supplier, supplierIndex) {
   job.selectedSupplier = {
     index: supplierIndex,
     selectedAt: new Date().toISOString(),
@@ -360,8 +447,6 @@ async function handleSelectSupplier(req, res) {
     supplierUrl: supplier.url || ""
   });
   upsertJob(job);
-
-  return redirect(res, `/monitor?key=${encodeURIComponent(key)}#${encodeURIComponent(job.id)}`);
 }
 
 function handleMonitorLitePage(_req, res) {
@@ -392,7 +477,7 @@ function handleMonitorLitePage(_req, res) {
     .card { border:1px solid #6b1024; background:#16080d; border-radius:18px; padding:16px; box-shadow:0 12px 30px rgba(0,0,0,.25); }
     .status { display:inline-block; padding:7px 10px; border-radius:999px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; font-size:12px; }
     .researching { background:#8a5b00; }
-    .human_review { background:#165c35; }
+    .human_review, .supplier_selected { background:#165c35; }
     .refund_due, .research_failed { background:#7a1028; }
     .awaiting_brief { background:#4b5563; }
     .stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:14px 0; }
@@ -460,6 +545,7 @@ function serializeJob(job, details = false) {
 
   return {
     ...base,
+    reviewLink: job.reviewToken ? `${config.publicBaseUrl.replace(/\/$/, "")}/review/${job.reviewToken}` : null,
     productRequest: job.productRequest || "",
     suppliers: job.research?.suppliers || [],
     candidateSources: job.research?.candidateSources || [],
@@ -476,6 +562,11 @@ function isValidMonitorKey(key) {
     (config.adminStatusSecret && key === config.adminStatusSecret)
     || (config.flowSecret && key === config.flowSecret)
   );
+}
+
+function getJobByReviewToken(token) {
+  if (!token) return null;
+  return readJobs().find((job) => job.reviewToken === token);
 }
 
 function monitorLoginHtml() {
@@ -506,10 +597,17 @@ function monitorLoginHtml() {
 </html>`;
 }
 
-function monitorJobCard(job, key) {
+function monitorJobCard(job, auth = {}) {
   const timeline = (job.timeline || []).slice(-6).reverse().map((event) => {
     return `<li><strong>${escapeHtml(formatEventTime(event.at))}</strong><br>${escapeHtml(event.message)}</li>`;
   }).join("");
+  const formAction = auth.reviewToken ? "/review/select-supplier" : "/monitor/select-supplier";
+  const formAuthFields = auth.reviewToken
+    ? `<input type="hidden" name="review_token" value="${escapeHtml(auth.reviewToken)}" />`
+    : `<input type="hidden" name="key" value="${escapeHtml(auth.key || "")}" />`;
+  const customerLine = auth.hideCustomer
+    ? ""
+    : `<p class="muted">${escapeHtml(job.customerName || "Customer")} ${job.customerEmail ? `· ${escapeHtml(job.customerEmail)}` : ""}</p>`;
   const selected = job.selectedSupplier?.supplier;
   const selectedHtml = selected ? `<div class="supplier" style="border-color:#2f8f58;background:#0d2116;">
       <div class="supplier-title">Selected supplier: ${escapeHtml(selected.name || "Unnamed source")}</div>
@@ -525,8 +623,8 @@ function monitorJobCard(job, key) {
       ${supplier.availability ? `<div class="muted">Availability: ${escapeHtml(supplier.availability)}</div>` : ""}
       ${supplier.product_match ? `<p class="muted">${escapeHtml(supplier.product_match)}</p>` : ""}
       ${supplier.url ? `<a href="${escapeHtml(supplier.url)}" target="_blank" rel="noreferrer">Open supplier/source</a>` : ""}
-      <form method="POST" action="/monitor/select-supplier" style="margin-top:10px;">
-        <input type="hidden" name="key" value="${escapeHtml(key)}" />
+      <form method="POST" action="${escapeHtml(formAction)}" style="margin-top:10px;">
+        ${formAuthFields}
         <input type="hidden" name="job_id" value="${escapeHtml(job.id)}" />
         <input type="hidden" name="supplier_index" value="${escapeHtml(index)}" />
         <button class="button" type="submit">${alreadySelected ? "Selected" : "Choose this supplier"}</button>
@@ -542,7 +640,7 @@ function monitorJobCard(job, key) {
   return `<section class="card">
     <h2>${escapeHtml(job.orderName || "Unknown order")}</h2>
     <span class="status ${escapeHtml(statusClass(job.status))}">${escapeHtml(statusLabel(job.status))}</span>
-    <p class="muted">${escapeHtml(job.customerName || "Customer")} ${job.customerEmail ? `· ${escapeHtml(job.customerEmail)}` : ""}</p>
+    ${customerLine}
     ${runningLine}
     <div class="stats">
       <div class="stat"><b>${escapeHtml(`${job.researchAttemptCount}/${job.maxResearchAttempts}`)}</b><span>checks</span></div>
