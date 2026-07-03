@@ -74,7 +74,7 @@ Create a Shopify Flow workflow:
    - `sourcing-started`
 4. Action: **Send HTTP request**
    - Method: `POST`
-   - URL: `https://YOUR_PUBLIC_URL/flow/order-paid`
+   - URL: `https://sourcingbusiness.onrender.com/flow/order-paid`
    - Headers:
      - `Content-Type: application/json`
      - `X-Arcovia-Flow-Secret: YOUR_ARCOVIA_FLOW_SECRET`

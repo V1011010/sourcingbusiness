@@ -80,13 +80,13 @@ Steps:
 10. Copy the public URL Render gives you, for example:
 
 ```text
-https://arcovia-ai-sourcing.onrender.com
+https://sourcingbusiness.onrender.com
 ```
 
 Then set:
 
 ```text
-PUBLIC_BASE_URL=https://arcovia-ai-sourcing.onrender.com
+PUBLIC_BASE_URL=https://sourcingbusiness.onrender.com
 ```
 
 ### 4. Shopify Flow workflow
@@ -115,7 +115,7 @@ arcovia-ai-sourcing, sourcing-started
 8. URL:
 
 ```text
-https://YOUR_PUBLIC_URL/flow/order-paid
+https://sourcingbusiness.onrender.com/flow/order-paid
 ```
 
 9. Headers:
@@ -188,7 +188,7 @@ Copy `.env.example` to `.env` and fill:
 
 ```text
 PORT=8787
-PUBLIC_BASE_URL=https://YOUR_PUBLIC_URL
+PUBLIC_BASE_URL=https://sourcingbusiness.onrender.com
 ARCOVIA_FLOW_SECRET=YOUR_LONG_RANDOM_SECRET
 OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-5.5
@@ -197,7 +197,7 @@ FROM_EMAIL=Arcovia <updates@arcovia.africa>
 ADMIN_EMAIL=vutlharingobeni5@gmail.com
 UPDATE_INTERVAL_HOURS=6
 MAX_SOURCING_DAYS=14
-DEPOSIT_SKU=ARC-DEPOSIT-250
+DEPOSIT_SKU=ARC-DEPOSIT-250,ARC-SOURCE-250
 ```
 
 ## Testing before real customers
@@ -205,7 +205,7 @@ DEPOSIT_SKU=ARC-DEPOSIT-250
 After deployment, open:
 
 ```text
-https://YOUR_PUBLIC_URL/health
+https://sourcingbusiness.onrender.com/health
 ```
 
 It should show:

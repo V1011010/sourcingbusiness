@@ -60,6 +60,17 @@ async function handleFlowOrderPaid(req, res) {
 
   const rawBody = await readBody(req);
   const payload = JSON.parse(rawBody || "{}");
+
+  if (req.headers["x-arcovia-dry-run"] === "1") {
+    return json(res, 200, {
+      ok: true,
+      dry_run: true,
+      deposit_order: isDepositOrder(payload),
+      product_request_present: Boolean(extractProductRequest(payload)),
+      order_name: payload.order_name || payload.name || null
+    });
+  }
+
   const job = await createJobFromOrderPayload(payload, "shopify_flow");
   json(res, 202, { ok: true, job_id: job.id, status: job.status });
 }
