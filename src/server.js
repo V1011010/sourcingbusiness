@@ -15,7 +15,11 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, {
         ok: true,
         service: "arcovia-ai-sourcing",
-        jobs: readJobs().length
+        jobs: readJobs().length,
+        features: {
+          shopifyOrderEnrichment: true,
+          adminJobsEndpoint: Boolean(config.adminStatusSecret)
+        }
       });
     }
 
