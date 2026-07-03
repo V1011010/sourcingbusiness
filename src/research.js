@@ -1,6 +1,6 @@
 import { config } from "./config.js";
 import { sendEmail } from "./email.js";
-import { adminReport, stageUpdate } from "./templates.js";
+import { adminReport, researchFailure, stageUpdate } from "./templates.js";
 import { addTimeline, getJob, upsertJob } from "./storage.js";
 
 const runningJobs = new Set();
@@ -17,6 +17,7 @@ export function queueResearch(jobId) {
         job.status = "research_failed";
         addTimeline(job, "research_failed", error.message);
         upsertJob(job);
+        await sendEmail({ to: config.adminEmail, ...researchFailure(job, error.message) });
       }
     } finally {
       runningJobs.delete(jobId);

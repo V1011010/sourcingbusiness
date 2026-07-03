@@ -113,3 +113,22 @@ ${job.research?.rawText || ""}
 Important: review manually before quoting or asking the customer to pay the balance.`
   };
 }
+
+export function researchFailure(job, errorMessage) {
+  return {
+    subject: `Arcovia AI research failed: ${job.orderName}`,
+    text: `Arcovia AI supplier research failed.
+
+Order: ${job.orderName}
+Customer: ${job.customerName || "n/a"} <${job.customerEmail || "n/a"}>
+Status: ${job.status}
+
+Request:
+${job.productRequest || "No request captured"}
+
+Failure:
+${errorMessage}
+
+Fix the API/config issue, then retry the paid-order webhook or ask Codex to reprocess the order.`
+  };
+}
