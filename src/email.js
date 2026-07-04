@@ -8,7 +8,7 @@ export async function sendEmail({ to, subject, text }) {
   }
 
   if (!config.resendApiKey) {
-    appendOutbox({ to, from: config.fromEmail, subject, text, dryRun: true });
+    appendOutbox({ to, from: config.fromEmail, replyTo: config.replyToEmail, subject, text, dryRun: true });
     return { ok: true, dryRun: true };
   }
 
@@ -35,6 +35,7 @@ export async function sendEmail({ to, subject, text }) {
           to,
           from: fallbackFrom,
           originalFrom: config.fromEmail,
+          replyTo: config.replyToEmail,
           subject,
           fallback: true,
           reason: "original_from_domain_not_verified"
@@ -43,11 +44,11 @@ export async function sendEmail({ to, subject, text }) {
       }
 
       const fallbackDetail = await fallbackResponse.text();
-      appendOutbox({ to, from: fallbackFrom, subject, text, failed: true, detail: fallbackDetail, fallback: true });
+      appendOutbox({ to, from: fallbackFrom, replyTo: config.replyToEmail, subject, text, failed: true, detail: fallbackDetail, fallback: true });
       return { ok: false, dryRun: false, reason: fallbackDetail };
     }
 
-    appendOutbox({ to, from: config.fromEmail, subject, text, failed: true, detail });
+    appendOutbox({ to, from: config.fromEmail, replyTo: config.replyToEmail, subject, text, failed: true, detail });
     return { ok: false, dryRun: false, reason: detail };
   }
 
@@ -65,7 +66,8 @@ function sendResendEmail({ from, to, subject, text }) {
       from,
       to: [to],
       subject,
-      text
+      text,
+      ...(config.replyToEmail ? { reply_to: config.replyToEmail } : {})
     })
   });
 }

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
 import { sendEmail } from "./email.js";
+import { enrichResearchImages, imageEnrichmentHealthFeatures } from "./image-enrichment.js";
 import { adminRefundDue, adminReport, customerOptionsReady, customerRefundDue } from "./templates.js";
 import { addTimeline, getJob, readJobs, upsertJob } from "./storage.js";
 import { researchPolicySummary } from "./research.js";
@@ -93,7 +94,7 @@ export async function handleLocalWorkerReport(req, res) {
     return json(res, 200, { ok: true, status: job.status, retry_at: job.nextResearchAt });
   }
 
-  const attemptResearch = normalizeLocalWorkerReport(body.report, attemptNumber);
+  const attemptResearch = await enrichResearchImages(normalizeLocalWorkerReport(body.report, attemptNumber));
   const hadTrustedBefore = Boolean(job.research?.suppliers?.length);
   const mergedResearch = mergeResearch(job.research, attemptResearch);
   const trustedSupplierCount = mergedResearch.suppliers.length;
@@ -219,7 +220,8 @@ export function localWorkerHealthFeatures() {
     localCodexWorkerEndpoints: true,
     localCodexWorkerLeaseMinutes: localWorkerLeaseMinutes(),
     localCodexWorkerTrustScoreNormalization: "accepts_0_to_1_or_0_to_100",
-    silentLocalWorkerReportReplay: true
+    silentLocalWorkerReportReplay: true,
+    ...imageEnrichmentHealthFeatures()
   };
 }
 

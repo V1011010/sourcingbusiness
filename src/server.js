@@ -41,6 +41,7 @@ const server = http.createServer(async (req, res) => {
           anonymizedCustomerImageProxy: true,
           customerSupplierChoiceCapture: true,
           resendDefaultSenderFallback: true,
+          resendReplyToAddress: Boolean(config.replyToEmail),
           missingBriefFixLinks: true,
           refundDueStatus: true,
           adminJobsEndpoint: Boolean(config.adminStatusSecret || config.flowSecret)

@@ -34,6 +34,7 @@ export const config = {
   openaiWebSearchContextSize: process.env.OPENAI_WEB_SEARCH_CONTEXT_SIZE || "high",
   resendApiKey: process.env.RESEND_API_KEY || "",
   fromEmail: process.env.FROM_EMAIL || "Arcovia <updates@arcovia.africa>",
+  replyToEmail: process.env.REPLY_TO_EMAIL || process.env.REPLY_TO || "arcovia.africa@gmail.com",
   adminEmail: process.env.ADMIN_EMAIL || "vutlharingobeni5@gmail.com",
   adminStatusSecret: process.env.ARCOVIA_ADMIN_STATUS_SECRET || "",
   updateIntervalHours: Number(process.env.UPDATE_INTERVAL_HOURS || 6),

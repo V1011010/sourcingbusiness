@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
 import { sendEmail } from "./email.js";
+import { enrichResearchImages } from "./image-enrichment.js";
 import {
   adminRefundDue,
   adminReport,
@@ -104,7 +105,7 @@ export async function runResearch(jobId) {
     await sendEmail({ to: job.customerEmail, ...stageUpdate(job) });
   }
 
-  const attemptResearch = await performSupplierResearch(job, attemptNumber, maxAttempts);
+  const attemptResearch = await enrichResearchImages(await performSupplierResearch(job, attemptNumber, maxAttempts));
   const mergedResearch = mergeResearch(job.research, attemptResearch);
   const trustedSupplierCount = mergedResearch.suppliers.length;
   const candidateCount = mergedResearch.candidateSources.length;
