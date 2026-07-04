@@ -3,6 +3,7 @@ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { config } from "./config.js";
 import { sendEmail } from "./email.js";
 import { isResearchRunning, queueDueResearchAttempts, queueResearch, researchPolicySummary } from "./research.js";
+import { handleLocalWorkerClaim, handleLocalWorkerReport, localWorkerHealthFeatures } from "./local-worker.js";
 import { fetchShopifyOrderDetails } from "./shopify.js";
 import { adminRefundDue, customerRefundDue, depositReceived, stageUpdate } from "./templates.js";
 import { addTimeline, getJob, readJobs, upsertJob } from "./storage.js";
@@ -33,6 +34,7 @@ const server = http.createServer(async (req, res) => {
           extraConfirmationSearchAfterMatch: true,
           technicalRetryDelayRespected: true,
           researchSchedulerPolicyVersion: "super_deep_conditional_v2",
+          ...localWorkerHealthFeatures(),
           activeResearchRetryMinutes: config.researchRetryDelayMinutes || 5,
           allOrdersSupplierReview: true,
           missingBriefFixLinks: true,
@@ -44,6 +46,14 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/admin/jobs") {
       return handleAdminJobs(req, res, url);
+    }
+
+    if (req.method === "POST" && url.pathname === "/local-worker/claim") {
+      return handleLocalWorkerClaim(req, res);
+    }
+
+    if (req.method === "POST" && url.pathname === "/local-worker/report") {
+      return handleLocalWorkerReport(req, res);
     }
 
     if (req.method === "GET" && url.pathname === "/monitor-lite") {
@@ -102,7 +112,7 @@ server.listen(config.port, () => {
 
 setInterval(() => {
   sendDueUpdates().catch((error) => console.error("update scheduler failed", error));
-  queueDueResearchAttempts();
+  if (!config.localCodexWorkerEnabled) queueDueResearchAttempts();
 }, 60_000);
 
 async function handleFlowOrderPaid(req, res) {
@@ -183,6 +193,9 @@ async function createJobFromOrderPayload(payload, source, options = {}) {
   addTimeline(job, "job_created", `Sourcing job created from ${source}.`);
   if (productRequest) {
     addTimeline(job, "brief_captured", "Product brief captured from the paid Shopify order.");
+    if (config.localCodexWorkerEnabled) {
+      addTimeline(job, "local_worker_waiting", "Local Codex worker mode is enabled. Waiting for the always-on PC worker to claim this research job.");
+    }
   } else {
     addTimeline(job, "awaiting_brief", "Paid order received, but no product brief was attached to the order.");
   }
@@ -192,7 +205,7 @@ async function createJobFromOrderPayload(payload, source, options = {}) {
     await sendEmail({ to: job.customerEmail, ...depositReceived(job) });
   }
 
-  if (productRequest) queueResearch(job.id);
+  if (productRequest && !config.localCodexWorkerEnabled) queueResearch(job.id);
   return job;
 }
 
@@ -210,9 +223,11 @@ async function updateExistingJobFromOrder(existing, payload, productRequest, sou
 
   if (existing.productRequest?.trim() && ["awaiting_brief", "research_failed"].includes(existing.status)) {
     existing.status = "researching";
-    addTimeline(existing, "research_requeued", "AI supplier research was queued from the latest paid-order payload.");
+    addTimeline(existing, "research_requeued", config.localCodexWorkerEnabled
+      ? "Local Codex worker research was queued from the latest paid-order payload."
+      : "AI supplier research was queued from the latest paid-order payload.");
     upsertJob(existing);
-    queueResearch(existing.id);
+    if (!config.localCodexWorkerEnabled) queueResearch(existing.id);
     return existing;
   }
 
@@ -220,9 +235,11 @@ async function updateExistingJobFromOrder(existing, payload, productRequest, sou
     existing.status = "researching";
     existing.currentResearchAttempt = null;
     existing.nextResearchAt = null;
-    addTimeline(existing, "research_requeued", "AI supplier research was force-queued from the latest paid-order payload.");
+    addTimeline(existing, "research_requeued", config.localCodexWorkerEnabled
+      ? "Local Codex worker research was force-queued from the latest paid-order payload."
+      : "AI supplier research was force-queued from the latest paid-order payload.");
     upsertJob(existing);
-    queueResearch(existing.id);
+    if (!config.localCodexWorkerEnabled) queueResearch(existing.id);
     return existing;
   }
 
@@ -1215,9 +1232,12 @@ async function handleBriefSubmit(req, res, token) {
   job.currentResearchAttempt = null;
   job.nextResearchAt = null;
   addTimeline(job, "brief_received", "Customer submitted product sourcing brief.");
+  if (config.localCodexWorkerEnabled) {
+    addTimeline(job, "local_worker_waiting", "Local Codex worker mode is enabled. Waiting for the always-on PC worker to claim this research job.");
+  }
   upsertJob(job);
 
-  queueResearch(job.id);
+  if (!config.localCodexWorkerEnabled) queueResearch(job.id);
   html(res, 200, "<h1>Brief received</h1><p>Arcovia has started the supplier search. You will receive updates by email.</p>");
 }
 

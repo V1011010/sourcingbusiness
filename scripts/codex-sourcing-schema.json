@@ -1,0 +1,132 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string"
+    },
+    "missing_customer_details": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "source_type": { "type": "string" },
+          "url": { "type": "string" },
+          "product_match": { "type": "string" },
+          "price": { "type": "string" },
+          "estimated_total_to_customer": { "type": "string" },
+          "over_budget": { "type": "boolean" },
+          "availability": { "type": "string" },
+          "location": { "type": "string" },
+          "delivery_or_pickup": { "type": "string" },
+          "trust_score": { "type": "number" },
+          "risk_level": { "type": "string" },
+          "trust_checks": {
+            "type": "object",
+            "properties": {
+              "customer_reviews": { "type": "string" },
+              "hellopeter": { "type": "string" },
+              "social_media": { "type": "string" },
+              "website_payment_delivery": { "type": "string" },
+              "business_identity": { "type": "string" }
+            },
+            "additionalProperties": true
+          },
+          "red_flags": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "evidence_urls": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "recommendation": { "type": "string" }
+        },
+        "required": [
+          "name",
+          "source_type",
+          "url",
+          "product_match",
+          "price",
+          "estimated_total_to_customer",
+          "over_budget",
+          "availability",
+          "location",
+          "delivery_or_pickup",
+          "trust_score",
+          "risk_level",
+          "trust_checks",
+          "red_flags",
+          "evidence_urls",
+          "recommendation"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "shipping_agents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "url": { "type": "string" },
+          "countries_supported": { "type": "string" },
+          "estimated_cost": { "type": "string" },
+          "trust_score": { "type": "number" },
+          "risk_level": { "type": "string" },
+          "evidence_urls": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "notes": { "type": "string" }
+        },
+        "required": [
+          "name",
+          "url",
+          "countries_supported",
+          "estimated_cost",
+          "trust_score",
+          "risk_level",
+          "evidence_urls",
+          "notes"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "rejected_sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "url": { "type": "string" },
+          "reason": { "type": "string" },
+          "evidence_urls": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "required": ["name", "url", "reason", "evidence_urls"],
+        "additionalProperties": false
+      }
+    },
+    "recommended_next_customer_message": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "summary",
+    "missing_customer_details",
+    "sources",
+    "shipping_agents",
+    "rejected_sources",
+    "recommended_next_customer_message"
+  ],
+  "additionalProperties": false
+}

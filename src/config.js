@@ -46,6 +46,9 @@ export const config = {
   maxResearchCandidates: Number(process.env.DEEP_RESEARCH_MAX_CANDIDATES || 25),
   highTrustThreshold: Number(process.env.HIGH_TRUST_THRESHOLD || 75),
   mediumTrustThreshold: Number(process.env.MEDIUM_TRUST_THRESHOLD || 60),
+  localCodexWorkerEnabled: ["1", "true", "yes", "on"].includes(String(process.env.LOCAL_CODEX_WORKER_ENABLED || "").toLowerCase()),
+  localWorkerSecret: process.env.ARCOVIA_LOCAL_WORKER_SECRET || process.env.ARCOVIA_FLOW_SECRET || "",
+  localWorkerLeaseMinutes: Number(process.env.LOCAL_CODEX_WORKER_LEASE_MINUTES || 45),
   depositSkus: (process.env.DEPOSIT_SKU || "ARC-DEPOSIT-250,ARC-SOURCE-250")
     .split(",")
     .map((sku) => sku.trim())

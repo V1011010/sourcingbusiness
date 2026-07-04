@@ -34,6 +34,7 @@ Shopify Flow is the easiest for this store because Arcovia is on Shopify Advance
 - Sends the internal supplier report to Arcovia for human approval.
 - Never buys from a supplier automatically.
 - If the initial super-deep search plus the no-match retries finish with no trusted source, marks the job `refund_due` and emails Arcovia/customer. The actual payment refund is still a manual Shopify/PayFast action until refund automation is separately tested.
+- Optional local Codex worker mode lets an always-on Windows PC run supplier research through the signed-in Codex CLI instead of the hosted OpenAI API.
 
 ## Local setup
 
@@ -56,6 +57,8 @@ Fill in `.env`:
 - `RESEARCH_RETRY_DELAY_MINUTES` defaults to `5`
 - `OPENAI_WEB_SEARCH_CONTEXT_SIZE` defaults to `high` for the super-deep sourcing pass
 - `RESEARCH_TECHNICAL_RETRY_DELAY_MINUTES` defaults to `15`; technical API/rate-limit errors retry quickly and do not count as one of the sourcing checks
+- `LOCAL_CODEX_WORKER_ENABLED=true` makes the hosted backend wait for the local Codex worker instead of calling OpenAI directly
+- `ARCOVIA_LOCAL_WORKER_SECRET` can be set separately; if blank, the worker uses `ARCOVIA_FLOW_SECRET`
 
 Start:
 
@@ -76,6 +79,52 @@ node scripts/dry-run-paid-order.js
 ```
 
 The dry-run test intentionally uses a blank customer email and no product brief, so it verifies job creation and status-page handling without sending real email or starting paid AI research.
+
+## Local Codex worker mode
+
+Use this when the store owner's computer is always on and Codex is signed in with ChatGPT subscription access.
+
+Hosted backend:
+
+```env
+LOCAL_CODEX_WORKER_ENABLED=true
+```
+
+Local PC `.env`:
+
+```env
+PUBLIC_BASE_URL=https://sourcingbusiness.onrender.com
+ARCOVIA_FLOW_SECRET=the-same-secret-used-in-shopify-flow
+```
+
+Then start the worker from the repo folder:
+
+```powershell
+node scripts/local-codex-worker.js
+```
+
+Or double-click:
+
+```text
+scripts/start-local-codex-worker.cmd
+```
+
+To test one poll without leaving it running:
+
+```powershell
+node scripts/local-codex-worker.js --once
+```
+
+How it works:
+
+1. Shopify paid deposit creates a sourcing job on Render.
+2. Render does not call OpenAI when local worker mode is enabled.
+3. The local worker claims the next ready job from `/local-worker/claim`.
+4. The worker runs `codex exec` locally with a structured JSON schema.
+5. The worker posts the supplier report back to `/local-worker/report`.
+6. Arcovia reviews suppliers in `/review` and manually chooses one.
+
+Keep the PC awake, online, and signed in to Codex. If Codex logs out or the PC sleeps, new research jobs wait until the worker is running again.
 
 ## Shopify Flow setup
 

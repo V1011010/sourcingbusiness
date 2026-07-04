@@ -1,0 +1,567 @@
+import { randomUUID } from "node:crypto";
+import { config } from "./config.js";
+import { sendEmail } from "./email.js";
+import { adminRefundDue, adminReport, customerRefundDue, stageUpdate } from "./templates.js";
+import { addTimeline, getJob, readJobs, upsertJob } from "./storage.js";
+import { researchPolicySummary } from "./research.js";
+
+export async function handleLocalWorkerClaim(req, res) {
+  if (!isAuthorizedLocalWorker(req)) return json(res, 401, { error: "invalid_worker_secret" });
+
+  const body = parseJsonBody(await readBody(req));
+  const workerId = textValue(body.worker_id) || `local-codex-${randomUUID()}`;
+  const job = findClaimableJob();
+
+  if (!job) {
+    return json(res, 200, {
+      ok: true,
+      claimed: false,
+      message: "No local Codex research jobs are ready."
+    });
+  }
+
+  const attemptNumber = Number(job.researchAttemptCount || 0) + 1;
+  const policy = researchPolicySummary();
+  const now = new Date();
+  const leaseUntil = addMinutes(now, localWorkerLeaseMinutes()).toISOString();
+
+  job.status = "researching";
+  job.maxResearchAttempts = policy.maxTotalAttempts;
+  job.currentResearchAttempt = attemptNumber;
+  job.nextResearchAt = null;
+  job.localWorker = {
+    workerId,
+    attemptNumber,
+    claimedAt: now.toISOString(),
+    leaseUntil
+  };
+
+  addTimeline(job, "local_worker_claimed", `Local Codex worker claimed ${researchPassTitle(job, attemptNumber)} ${attemptNumber} of ${policy.maxTotalAttempts}.`, {
+    workerId,
+    attempt: attemptNumber,
+    maxAttempts: policy.maxTotalAttempts,
+    researchPassType: researchPassType(job, attemptNumber),
+    leaseUntil
+  });
+  upsertJob(job);
+
+  return json(res, 200, {
+    ok: true,
+    claimed: true,
+    worker_id: workerId,
+    lease_until: leaseUntil,
+    job: {
+      id: job.id,
+      order_name: job.orderName,
+      customer_name: job.customerName || "",
+      product_request: job.productRequest,
+      attempt: attemptNumber,
+      max_attempts: policy.maxTotalAttempts,
+      research_pass_type: researchPassType(job, attemptNumber),
+      research_pass_title: researchPassTitle(job, attemptNumber),
+      previous_research_summary: summarizePreviousAttempts(job),
+      policy,
+      prompt: buildLocalCodexPrompt(job, attemptNumber, policy)
+    }
+  });
+}
+
+export async function handleLocalWorkerReport(req, res) {
+  if (!isAuthorizedLocalWorker(req)) return json(res, 401, { error: "invalid_worker_secret" });
+
+  const body = parseJsonBody(await readBody(req));
+  const job = getJob(body.job_id);
+  if (!job) return json(res, 404, { error: "job_not_found" });
+
+  const workerId = textValue(body.worker_id);
+  const attemptNumber = Number(body.attempt || job.localWorker?.attemptNumber || Number(job.researchAttemptCount || 0) + 1);
+  const policy = researchPolicySummary();
+
+  if (body.error) {
+    const safeError = safeWorkerError(body.error);
+    job.status = "researching";
+    job.currentResearchAttempt = null;
+    job.nextResearchAt = addMinutes(new Date(), localWorkerFailureRetryMinutes()).toISOString();
+    job.localWorker = null;
+    addTimeline(job, "local_worker_failed", `Local Codex worker failed before completing research. Retry scheduled for ${formatJohannesburg(job.nextResearchAt)}.`, {
+      workerId,
+      attempt: attemptNumber,
+      error: safeError
+    });
+    upsertJob(job);
+    return json(res, 200, { ok: true, status: job.status, retry_at: job.nextResearchAt });
+  }
+
+  const attemptResearch = normalizeLocalWorkerReport(body.report, attemptNumber);
+  const hadTrustedBefore = Boolean(job.research?.suppliers?.length);
+  const mergedResearch = mergeResearch(job.research, attemptResearch);
+  const trustedSupplierCount = mergedResearch.suppliers.length;
+  const candidateCount = mergedResearch.candidateSources.length;
+  const rejectedCount = mergedResearch.rejectedSources.length;
+
+  job.research = mergedResearch;
+  job.researchAttemptCount = Math.max(Number(job.researchAttemptCount || 0), attemptNumber);
+  job.maxResearchAttempts = policy.maxTotalAttempts;
+  job.currentResearchAttempt = null;
+  job.localWorker = null;
+  job.nextUpdateAt = addHours(new Date(), config.updateIntervalHours).toISOString();
+  job.researchStartedAt ||= new Date().toISOString();
+  job.researchAttempts ||= [];
+  job.researchAttempts.push({
+    attempt: attemptNumber,
+    researchPassType: researchPassType(job, attemptNumber),
+    startedAt: body.started_at || null,
+    completedAt: attemptResearch.completedAt,
+    summary: attemptResearch.summary,
+    candidateCount: attemptResearch.candidateSources.length,
+    trustedSupplierCount: attemptResearch.suppliers.length,
+    rejectedSourceCount: attemptResearch.rejectedSources.length,
+    shippingAgentCount: attemptResearch.shippingAgents.length,
+    sourceCount: attemptResearch.webSources.length,
+    engine: "local_codex_worker"
+  });
+
+  addTimeline(job, "local_worker_report_received", `Local Codex worker finished ${researchPassTitle(job, attemptNumber)} ${attemptNumber}: ${trustedSupplierCount} trusted supplier(s), ${candidateCount} candidate(s), ${rejectedCount} rejected.`, {
+    workerId,
+    attempt: attemptNumber,
+    trustedSupplierCount,
+    candidateCount,
+    rejectedCount
+  });
+
+  if (trustedSupplierCount > 0) {
+    job.researchFirstFoundAt ||= new Date().toISOString();
+    job.researchFirstFoundAttempt ||= attemptNumber;
+  }
+
+  if (trustedSupplierCount > 0 && shouldRunConfirmationSearch(job, attemptNumber, policy)) {
+    job.status = "human_review";
+    job.nextResearchAt = addMinutes(new Date(), researchRetryDelayMinutes()).toISOString();
+    addTimeline(job, "local_worker_more_scheduled", `Supplier options are ready. Local Codex will run one extra expansion check at ${formatJohannesburg(job.nextResearchAt)} unless Arcovia selects a supplier first.`, {
+      nextResearchAt: job.nextResearchAt,
+      nextAttempt: attemptNumber + 1,
+      maxAttempts: policy.maxTotalAttempts
+    });
+    upsertJob(job);
+
+    if (!hadTrustedBefore) {
+      await sendEmail({ to: config.adminEmail, ...adminReport(job) });
+      await sendEmail({ to: job.customerEmail, ...stageUpdate(job) });
+    }
+
+    return json(res, 200, { ok: true, status: job.status, suppliers: trustedSupplierCount, next_research_at: job.nextResearchAt });
+  }
+
+  if (trustedSupplierCount > 0) {
+    job.status = "human_review";
+    job.researchCompletedAt = new Date().toISOString();
+    job.nextResearchAt = null;
+    addTimeline(job, "research_completed", "Local Codex sourcing is complete. Supplier shortlist is ready for Arcovia human review.", {
+      suppliers: trustedSupplierCount,
+      attempts: attemptNumber
+    });
+    upsertJob(job);
+
+    await sendEmail({ to: config.adminEmail, ...adminReport(job) });
+    if (!hadTrustedBefore) {
+      await sendEmail({ to: job.customerEmail, ...stageUpdate(job) });
+    }
+
+    return json(res, 200, { ok: true, status: job.status, suppliers: trustedSupplierCount });
+  }
+
+  if (attemptNumber >= policy.noMatchAttemptLimit) {
+    job.status = "refund_due";
+    job.refundStatus = "manual_refund_required";
+    job.refundReason = `No trusted source found by local Codex after the initial super-deep search and ${policy.noMatchRetries} retry search(es).`;
+    job.researchCompletedAt = new Date().toISOString();
+    job.nextResearchAt = null;
+    job.nextUpdateAt = null;
+    addTimeline(job, "refund_due", job.refundReason, {
+      attempts: attemptNumber,
+      candidateCount,
+      rejectedCount
+    });
+    upsertJob(job);
+
+    await sendEmail({ to: config.adminEmail, ...adminRefundDue(job) });
+    await sendEmail({ to: job.customerEmail, ...customerRefundDue(job) });
+    return json(res, 200, { ok: true, status: job.status, suppliers: 0 });
+  }
+
+  job.status = "researching";
+  job.nextResearchAt = addMinutes(new Date(), researchRetryDelayMinutes()).toISOString();
+  addTimeline(job, "local_worker_retry_scheduled", `Local Codex found no trusted supplier yet. Retry ${attemptNumber + 1} is scheduled for ${formatJohannesburg(job.nextResearchAt)}.`, {
+    nextResearchAt: job.nextResearchAt,
+    nextAttempt: attemptNumber + 1,
+    maxAttempts: policy.maxTotalAttempts
+  });
+  upsertJob(job);
+
+  return json(res, 200, { ok: true, status: job.status, suppliers: 0, next_research_at: job.nextResearchAt });
+}
+
+export function localWorkerHealthFeatures() {
+  return {
+    localCodexWorkerEnabled: config.localCodexWorkerEnabled,
+    localCodexWorkerEndpoints: true,
+    localCodexWorkerLeaseMinutes: localWorkerLeaseMinutes()
+  };
+}
+
+function findClaimableJob() {
+  const now = new Date();
+  return readJobs()
+    .filter((job) => {
+      if (!["researching", "human_review", "research_failed"].includes(job.status)) return false;
+      if (job.selectedSupplier) return false;
+      if (!job.productRequest?.trim()) return false;
+      if (job.localWorker?.leaseUntil && new Date(job.localWorker.leaseUntil) > now) return false;
+      if (hasCompletedPolicy(job)) return false;
+      if (job.nextResearchAt && new Date(job.nextResearchAt) > now && !isOpenAiQuotaBlocked(job)) return false;
+      return true;
+    })
+    .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))[0] || null;
+}
+
+function normalizeLocalWorkerReport(report, attemptNumber) {
+  const sources = normalizeSourceList(report?.sources || report?.suppliers || report?.candidate_sources || []);
+  const trustedSources = filterTrustedSources(sources);
+  const rejectedSources = normalizeRejectedSources(report?.rejected_sources || report?.unsafe_sources || []);
+  const shippingAgents = normalizeShippingAgents(report?.shipping_agents || []);
+  const completedAt = new Date().toISOString();
+  const rawText = JSON.stringify(report || {}, null, 2);
+
+  return {
+    summary: textValue(report?.summary) || "Local Codex returned a supplier research report.",
+    missingCustomerDetails: listValues(report?.missing_customer_details).map(textValue).filter(Boolean),
+    suppliers: sortByMostExpensiveFirst(trustedSources),
+    candidateSources: sortByMostExpensiveFirst(sources),
+    rejectedSources,
+    shippingAgents,
+    webSources: extractEvidenceWebSources([...sources, ...rejectedSources, ...shippingAgents]),
+    rawText,
+    model: textValue(report?.model) || "local-codex",
+    attempt: attemptNumber,
+    completedAt,
+    recommendedNextCustomerMessage: textValue(report?.recommended_next_customer_message)
+  };
+}
+
+function mergeResearch(previous, current) {
+  const previousAttempts = previous?.attempts || [];
+  const attempts = [
+    ...previousAttempts,
+    {
+      attempt: current.attempt,
+      completedAt: current.completedAt,
+      summary: current.summary,
+      engine: "local_codex_worker"
+    }
+  ];
+
+  return {
+    summary: current.summary,
+    missingCustomerDetails: uniqueStrings([...(previous?.missingCustomerDetails || []), ...current.missingCustomerDetails]),
+    suppliers: sortByMostExpensiveFirst(uniqueByIdentity([...(previous?.suppliers || []), ...current.suppliers])),
+    candidateSources: sortByMostExpensiveFirst(uniqueByIdentity([...(previous?.candidateSources || []), ...current.candidateSources])).slice(0, finalSourceLimit() * researchPolicySummary().maxTotalAttempts),
+    rejectedSources: uniqueByIdentity([...(previous?.rejectedSources || []), ...current.rejectedSources]).slice(0, 50),
+    shippingAgents: uniqueByIdentity([...(previous?.shippingAgents || []), ...current.shippingAgents]).slice(0, 20),
+    webSources: uniqueByUrl([...(previous?.webSources || []), ...current.webSources]).slice(0, 100),
+    rawText: current.rawText,
+    model: current.model,
+    completedAt: current.completedAt,
+    attempts
+  };
+}
+
+function buildLocalCodexPrompt(job, attemptNumber, policy) {
+  return `You are Arcovia's local Codex supplier-sourcing worker.
+
+You are running on the store owner's always-on Windows PC. Research the customer's requested product and return ONLY JSON that matches the provided output schema.
+
+Order: ${job.orderName}
+Research check: ${attemptNumber} of ${policy.maxTotalAttempts}
+Research pass type: ${researchPassType(job, attemptNumber)}
+
+Customer request:
+${job.productRequest}
+
+Previous checks:
+${summarizePreviousAttempts(job)}
+
+Required behavior:
+- Do one super-deep search on the first pass. Find as many real choices as possible in one run.
+- If this is a retry, use different wording and search angles from previous attempts.
+- If suppliers were already found, search once more for missed alternatives and stronger trust evidence.
+- Search online stores, physical stores, boutiques, distributors, wholesalers, importers, marketplaces, resellers, and shipping/parcel-forwarding options.
+- Check trust signals for every candidate: customer reviews, HelloPeter where relevant, social media, public complaints, delivery/payment claims, business identity, contact details, refund policy, and counterfeit/scam red flags.
+- Include options above the customer's budget if they are real and relevant.
+- Remove unsafe or untrusted sources from the final sources list and put them under rejected_sources with short factual reasons.
+- Do not invent prices, reviews, addresses, ratings, or availability.
+- Sort final trusted/needs-more-checks sources from most expensive to cheapest.
+- Return at most ${finalSourceLimit()} source candidates, up to 8 shipping agents, and up to 20 rejected sources.
+- Keep text compact. Use real URLs in evidence_urls.
+- Do not buy anything. Do not contact suppliers. Do not reveal unreviewed suppliers to the customer.
+
+Return JSON only.`;
+}
+
+function hasCompletedPolicy(job) {
+  const policy = researchPolicySummary();
+  const completedAttempts = Number(job.researchAttemptCount || 0);
+  const trustedSupplierCount = Number(job.research?.suppliers?.length || 0);
+  if (trustedSupplierCount > 0) {
+    return completedAttempts >= firstTrustedAttempt(job, completedAttempts || 1) + policy.confirmationChecksAfterFound;
+  }
+  return completedAttempts >= policy.noMatchAttemptLimit;
+}
+
+function shouldRunConfirmationSearch(job, attemptNumber, policy) {
+  const firstFoundAttempt = firstTrustedAttempt(job, attemptNumber);
+  const requiredAttempt = Math.min(firstFoundAttempt + policy.confirmationChecksAfterFound, policy.maxTotalAttempts);
+  return attemptNumber < requiredAttempt;
+}
+
+function firstTrustedAttempt(job, fallbackAttempt) {
+  const explicit = Number(job.researchFirstFoundAttempt || 0);
+  if (explicit > 0) return explicit;
+  const previousAttempt = (job.researchAttempts || [])
+    .filter((attempt) => Number(attempt.trustedSupplierCount || 0) > 0)
+    .map((attempt) => Number(attempt.attempt || 0))
+    .filter((attempt) => attempt > 0)
+    .sort((a, b) => a - b)[0];
+  if (previousAttempt) return previousAttempt;
+  if (Number(job.research?.suppliers?.length || 0) > 0 && Number(job.researchAttemptCount || 0) > 0) {
+    return Number(job.researchAttemptCount || 0);
+  }
+  return Math.max(1, Number(fallbackAttempt || 1));
+}
+
+function researchPassType(job, attemptNumber) {
+  if (attemptNumber === 1) return "primary_super_deep_search";
+  if (Number(job.research?.suppliers?.length || 0) > 0 || Number(job.researchFirstFoundAttempt || 0) > 0) {
+    return "confirmation_expansion_search";
+  }
+  return "no_match_retry_search";
+}
+
+function researchPassTitle(job, attemptNumber) {
+  const labels = {
+    primary_super_deep_search: "primary super-deep sourcing search",
+    confirmation_expansion_search: "supplier expansion/confirmation search",
+    no_match_retry_search: "no-match retry sourcing search"
+  };
+  return labels[researchPassType(job, attemptNumber)] || "deep sourcing check";
+}
+
+function summarizePreviousAttempts(job) {
+  const attempts = (job.researchAttempts || []).slice(-3);
+  if (!attempts.length) return "No previous local Codex sourcing checks for this order.";
+  return attempts.map((attempt) => {
+    return `Check ${attempt.attempt}: ${attempt.trustedSupplierCount || 0} trusted, ${attempt.candidateCount || 0} candidates, ${attempt.rejectedSourceCount || 0} rejected. ${attempt.summary || ""}`;
+  }).join("\n");
+}
+
+function isOpenAiQuotaBlocked(job) {
+  const latest = (job.timeline || []).at(-1);
+  const error = String(latest?.meta?.error || job.lastResearchError || "").toLowerCase();
+  return error.includes("insufficient_quota") || error.includes("exceeded your current quota");
+}
+
+function isAuthorizedLocalWorker(req) {
+  const provided = req.headers["x-arcovia-worker-secret"] || req.headers["x-arcovia-flow-secret"];
+  return Boolean(config.localWorkerSecret && provided === config.localWorkerSecret);
+}
+
+function normalizeSourceList(sources) {
+  return listValues(sources).map((source) => ({
+    name: textValue(source.name || source.supplier_name || source.store || source.title),
+    source_type: textValue(source.source_type || source.type || "other"),
+    url: textValue(source.url || source.product_url || source.website),
+    product_match: textValue(source.product_match || source.match),
+    price: textValue(source.price || source.price_found),
+    estimated_total_to_customer: textValue(source.estimated_total_to_customer || source.estimated_total || source.total_cost),
+    over_budget: Boolean(source.over_budget),
+    availability: textValue(source.availability),
+    location: textValue(source.location),
+    delivery_or_pickup: textValue(source.delivery_or_pickup || source.delivery),
+    trust_score: clampScore(source.trust_score),
+    risk_level: textValue(source.risk_level || "unknown"),
+    trust_checks: source.trust_checks && typeof source.trust_checks === "object" ? source.trust_checks : {},
+    red_flags: listValues(source.red_flags).map(textValue).filter(Boolean),
+    evidence_urls: listValues(source.evidence_urls || source.evidence || source.sources).map(textValue).filter(Boolean),
+    recommendation: textValue(source.recommendation || "needs_more_checks")
+  })).filter((source) => source.name || source.url);
+}
+
+function normalizeRejectedSources(sources) {
+  return listValues(sources).map((source) => ({
+    name: textValue(source.name || source.supplier_name || source.store || source.title),
+    url: textValue(source.url || source.product_url || source.website),
+    reason: textValue(source.reason || source.red_flag || source.summary),
+    evidence_urls: listValues(source.evidence_urls || source.evidence || source.sources).map(textValue).filter(Boolean)
+  })).filter((source) => source.name || source.url || source.reason);
+}
+
+function normalizeShippingAgents(agents) {
+  return listValues(agents).map((agent) => ({
+    name: textValue(agent.name),
+    url: textValue(agent.url || agent.website),
+    countries_supported: textValue(agent.countries_supported || agent.route || agent.countries),
+    estimated_cost: textValue(agent.estimated_cost || agent.price),
+    trust_score: clampScore(agent.trust_score),
+    risk_level: textValue(agent.risk_level || "unknown"),
+    evidence_urls: listValues(agent.evidence_urls || agent.evidence || agent.sources).map(textValue).filter(Boolean),
+    notes: textValue(agent.notes || agent.summary)
+  })).filter((agent) => agent.name || agent.url);
+}
+
+function filterTrustedSources(sources) {
+  return sources.filter((source) => {
+    const recommendation = lower(source.recommendation);
+    const risk = lower(source.risk_level);
+    const trustScore = Number(source.trust_score || 0);
+    const redFlagText = [
+      ...(Array.isArray(source.red_flags) ? source.red_flags : []),
+      JSON.stringify(source.trust_checks || {})
+    ].join(" ").toLowerCase();
+
+    if (!source.url && !source.name) return false;
+    if (recommendation.includes("reject")) return false;
+    if (risk === "high" || risk === "unsafe") return false;
+    if (hasSevereBadReviewSignal(redFlagText) && trustScore < config.highTrustThreshold) return false;
+    if (recommendation.includes("approve")) return true;
+    return trustScore >= config.mediumTrustThreshold && !hasSevereBadReviewSignal(redFlagText);
+  });
+}
+
+function hasSevereBadReviewSignal(text) {
+  return /scam|fake store|fake-store|fraud|counterfeit|no delivery|non[- ]delivery|never delivered|unresolved complaint|chargeback|stolen|too many bad|many bad reviews/.test(text);
+}
+
+function extractEvidenceWebSources(items) {
+  const sources = [];
+  for (const item of items) {
+    if (item.url) sources.push({ title: item.name || item.url, url: item.url, source: "local_codex" });
+    for (const url of item.evidence_urls || []) {
+      sources.push({ title: item.name || url, url, source: "local_codex_evidence" });
+    }
+  }
+  return uniqueByUrl(sources).filter((source) => source.url);
+}
+
+function sortByMostExpensiveFirst(items) {
+  return [...items].sort((a, b) => priceSortValue(b) - priceSortValue(a));
+}
+
+function priceSortValue(item) {
+  const value = `${item.estimated_total_to_customer || ""} ${item.price || ""}`;
+  const matches = [...value.matchAll(/(?:R|ZAR|USD|US\$|EUR|GBP|£|\$)?\s*([0-9][0-9\s,.]*)/gi)]
+    .map((match) => Number(match[1].replace(/\s/g, "").replace(/,/g, "")))
+    .filter((number) => Number.isFinite(number));
+  return matches.length ? Math.max(...matches) : -1;
+}
+
+function uniqueByIdentity(items) {
+  const seen = new Set();
+  const unique = [];
+  for (const item of items || []) {
+    const key = lower(item.url || item.name || JSON.stringify(item));
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(item);
+  }
+  return unique;
+}
+
+function uniqueByUrl(items) {
+  const seen = new Set();
+  const unique = [];
+  for (const item of items || []) {
+    const key = lower(item.url || item.title || JSON.stringify(item));
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(item);
+  }
+  return unique;
+}
+
+function uniqueStrings(values) {
+  return [...new Set(listValues(values).map(textValue).filter(Boolean))];
+}
+
+function finalSourceLimit() {
+  return Math.max(25, Math.floor(Number(config.maxResearchCandidates || 25)));
+}
+
+function researchRetryDelayMinutes() {
+  if (Number(config.researchRetryDelayMinutes) > 0) return Number(config.researchRetryDelayMinutes);
+  return 5;
+}
+
+function localWorkerFailureRetryMinutes() {
+  return Math.max(5, Number(config.researchTechnicalRetryDelayMinutes || 15));
+}
+
+function localWorkerLeaseMinutes() {
+  return Math.max(5, Number(config.localWorkerLeaseMinutes || 45));
+}
+
+function parseJsonBody(rawBody) {
+  try {
+    return JSON.parse(rawBody || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
+function json(res, status, data) {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(data, null, 2));
+}
+
+function listValues(value) {
+  return Array.isArray(value) ? value.filter(Boolean) : [];
+}
+
+function textValue(value) {
+  return String(value || "").trim();
+}
+
+function lower(value) {
+  return textValue(value).toLowerCase();
+}
+
+function clampScore(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return 0;
+  return Math.max(0, Math.min(100, number));
+}
+
+function safeWorkerError(error) {
+  return String(error?.message || error || "Unknown local Codex worker error")
+    .replace(/sk-[A-Za-z0-9_-]+/g, "[redacted-api-key]")
+    .slice(0, 2000);
+}
+
+function addHours(date, hours) {
+  return new Date(date.getTime() + hours * 60 * 60 * 1000);
+}
+
+function addMinutes(date, minutes) {
+  return new Date(date.getTime() + minutes * 60 * 1000);
+}
+
+function formatJohannesburg(value) {
+  return new Date(value).toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg" });
+}

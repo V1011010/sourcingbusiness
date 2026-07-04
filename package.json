@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test:dry-run": "node scripts/dry-run-paid-order.js"
+    "test:dry-run": "node scripts/dry-run-paid-order.js",
+    "worker:codex": "node scripts/local-codex-worker.js",
+    "worker:codex:once": "node scripts/local-codex-worker.js --once"
   },
   "engines": {
     "node": ">=20"

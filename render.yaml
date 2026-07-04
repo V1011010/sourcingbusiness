@@ -51,5 +51,9 @@ services:
         value: "15"
       - key: DEEP_RESEARCH_MAX_CANDIDATES
         value: "25"
+      - key: LOCAL_CODEX_WORKER_ENABLED
+        value: "true"
+      - key: LOCAL_CODEX_WORKER_LEASE_MINUTES
+        value: "45"
       - key: DEPOSIT_SKU
         value: ARC-DEPOSIT-250,ARC-SOURCE-250
