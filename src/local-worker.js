@@ -300,6 +300,8 @@ Required behavior:
 - Remove unsafe or untrusted sources from the final sources list and put them under rejected_sources with short factual reasons.
 - Do not invent prices, reviews, addresses, ratings, or availability.
 - Sort final trusted/needs-more-checks sources from most expensive to cheapest.
+- trust_score must be 0 to 100, not 0 to 1.
+- recommendation must be one of: approve_for_human_review, needs_more_checks, reject.
 - Return at most ${finalSourceLimit()} source candidates, up to 8 shipping agents, and up to 20 rejected sources.
 - Keep text compact. Use real URLs in evidence_urls.
 - Do not buy anything. Do not contact suppliers. Do not reveal unreviewed suppliers to the customer.
@@ -545,7 +547,8 @@ function lower(value) {
 function clampScore(value) {
   const number = Number(value || 0);
   if (!Number.isFinite(number)) return 0;
-  return Math.max(0, Math.min(100, number));
+  const score = number > 0 && number <= 1 ? number * 100 : number;
+  return Math.max(0, Math.min(100, score));
 }
 
 function safeWorkerError(error) {

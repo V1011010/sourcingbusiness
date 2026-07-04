@@ -914,7 +914,8 @@ function lower(value) {
 function clampScore(value) {
   const number = Number(value || 0);
   if (!Number.isFinite(number)) return 0;
-  return Math.max(0, Math.min(100, number));
+  const score = number > 0 && number <= 1 ? number * 100 : number;
+  return Math.max(0, Math.min(100, score));
 }
 
 function safeErrorMessage(error) {
