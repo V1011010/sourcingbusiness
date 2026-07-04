@@ -205,7 +205,8 @@ export function localWorkerHealthFeatures() {
   return {
     localCodexWorkerEnabled: config.localCodexWorkerEnabled,
     localCodexWorkerEndpoints: true,
-    localCodexWorkerLeaseMinutes: localWorkerLeaseMinutes()
+    localCodexWorkerLeaseMinutes: localWorkerLeaseMinutes(),
+    localCodexWorkerTrustScoreNormalization: "accepts_0_to_1_or_0_to_100"
   };
 }
 
