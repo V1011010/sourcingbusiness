@@ -31,13 +31,21 @@ export function queueDueResearchAttempts() {
     if (!["researching", "human_review"].includes(job.status)) continue;
     if (job.selectedSupplier) continue;
     if (!job.productRequest?.trim()) continue;
-    if (Number(job.researchAttemptCount || 0) >= Number(job.maxResearchAttempts || maxResearchAttempts())) continue;
+    const maxAttempts = maxResearchAttempts();
+    if (Number(job.maxResearchAttempts || 0) !== maxAttempts) {
+      job.maxResearchAttempts = maxAttempts;
+      upsertJob(job);
+    }
+    if (hasCompletedResearchPolicy(job)) {
+      settleCompletedPolicyJob(job);
+      continue;
+    }
     if (runningJobs.has(job.id)) continue;
     if (job.nextResearchAt && new Date(job.nextResearchAt) > now) {
       const maxReasonableNext = addMinutes(now, researchRetryDelayMinutes() + 1);
       if (new Date(job.nextResearchAt) > maxReasonableNext) {
         job.nextResearchAt = null;
-        addTimeline(job, "research_schedule_shortened", "Next AI research check was moved forward to keep the 10-check process active.");
+        addTimeline(job, "research_schedule_shortened", "Next AI research check was moved forward to keep the deep-search policy active.");
         upsertJob(job);
       } else {
         continue;
@@ -49,6 +57,17 @@ export function queueDueResearchAttempts() {
 
 export function isResearchRunning(jobId) {
   return runningJobs.has(jobId);
+}
+
+export function researchPolicySummary() {
+  return {
+    firstPass: "super_deep",
+    noMatchRetries: noMatchRetryCount(),
+    noMatchAttemptLimit: noMatchAttemptLimit(),
+    confirmationChecksAfterFound: confirmationChecksAfterFound(),
+    maxTotalAttempts: maxResearchAttempts(),
+    finalSourceLimit: finalSourceLimit()
+  };
 }
 
 export async function runResearch(jobId) {
@@ -72,9 +91,10 @@ export async function runResearch(jobId) {
   job.nextUpdateAt = addHours(now, config.updateIntervalHours).toISOString();
   job.researchAttempts ||= [];
 
-  addTimeline(job, "research_attempt_started", `Deep sourcing check ${attemptNumber} of ${maxAttempts} started.`, {
+  addTimeline(job, "research_attempt_started", `${researchPassTitle(job, attemptNumber)} ${attemptNumber} of ${maxAttempts} started.`, {
     attempt: attemptNumber,
-    maxAttempts
+    maxAttempts,
+    researchPassType: researchPassType(job, attemptNumber)
   });
   upsertJob(job);
 
@@ -91,6 +111,7 @@ export async function runResearch(jobId) {
   job.research = mergedResearch;
   job.researchAttempts.push({
     attempt: attemptNumber,
+    researchPassType: researchPassType(job, attemptNumber),
     startedAt: now.toISOString(),
     completedAt: attemptResearch.completedAt,
     summary: attemptResearch.summary,
@@ -104,7 +125,7 @@ export async function runResearch(jobId) {
   addTimeline(
     job,
     "research_attempt_completed",
-    `Deep sourcing check ${attemptNumber} finished: ${trustedSupplierCount} trusted supplier(s), ${candidateCount} total candidate(s), ${rejectedCount} rejected source(s).`,
+    `${researchPassTitle(job, attemptNumber)} ${attemptNumber} finished: ${trustedSupplierCount} trusted supplier(s), ${candidateCount} total candidate(s), ${rejectedCount} rejected source(s).`,
     {
       attempt: attemptNumber,
       trustedSupplierCount,
@@ -113,14 +134,18 @@ export async function runResearch(jobId) {
     }
   );
 
-  if (trustedSupplierCount > 0 && attemptNumber < maxAttempts) {
+  if (trustedSupplierCount > 0) {
+    job.researchFirstFoundAt ||= new Date().toISOString();
+    job.researchFirstFoundAttempt = firstTrustedAttempt(job, attemptNumber);
+  }
+
+  if (shouldRunConfirmationSearch(job, attemptNumber, trustedSupplierCount)) {
     const nextResearchAt = addMinutes(new Date(), researchRetryDelayMinutes()).toISOString();
     job.status = "human_review";
-    job.researchFirstFoundAt ||= new Date().toISOString();
     job.currentResearchAttempt = null;
     job.nextResearchAt = nextResearchAt;
     job.nextUpdateAt = addHours(new Date(), config.updateIntervalHours).toISOString();
-    addTimeline(job, "research_more_scheduled", `Supplier options are ready, but AI will keep researching. Next deep sourcing check ${attemptNumber + 1} of ${maxAttempts} is scheduled for ${formatJohannesburg(nextResearchAt)}.`, {
+    addTimeline(job, "research_more_scheduled", `Supplier options are ready. One extra expansion check is scheduled for ${formatJohannesburg(nextResearchAt)} to find any missed choices before Arcovia picks a supplier.`, {
       suppliers: trustedSupplierCount,
       nextResearchAt,
       nextAttempt: attemptNumber + 1,
@@ -137,12 +162,11 @@ export async function runResearch(jobId) {
 
   if (trustedSupplierCount > 0) {
     job.status = "human_review";
-    job.researchFirstFoundAt ||= new Date().toISOString();
     job.researchCompletedAt = new Date().toISOString();
     job.currentResearchAttempt = null;
     job.nextResearchAt = null;
     job.nextUpdateAt = addHours(new Date(), config.updateIntervalHours).toISOString();
-    addTimeline(job, "research_completed", `All ${maxAttempts} deep sourcing checks are complete. Supplier shortlist is ready for Arcovia human review.`, {
+    addTimeline(job, "research_completed", `Deep sourcing is complete under the new policy. Supplier shortlist is ready for Arcovia human review.`, {
       suppliers: trustedSupplierCount,
       attempts: attemptNumber
     });
@@ -155,10 +179,10 @@ export async function runResearch(jobId) {
     return;
   }
 
-  if (attemptNumber >= maxAttempts) {
+  if (attemptNumber >= noMatchAttemptLimit()) {
     job.status = "refund_due";
     job.refundStatus = "manual_refund_required";
-    job.refundReason = `No trusted source found after ${maxAttempts} deep sourcing checks.`;
+    job.refundReason = `No trusted source found after the initial super-deep search and ${noMatchRetryCount()} retry search(es).`;
     job.researchCompletedAt = new Date().toISOString();
     job.currentResearchAttempt = null;
     job.nextResearchAt = null;
@@ -238,11 +262,11 @@ async function performSupplierResearch(job, attemptNumber, maxAttempts) {
 
   const requestBody = {
     model: config.openaiModel,
-    max_output_tokens: config.openaiMaxOutputTokens,
+    max_output_tokens: outputTokenBudgetForAttempt(attemptNumber),
     tools: [{
       type: "web_search",
       external_web_access: true,
-      search_context_size: config.openaiWebSearchContextSize,
+      search_context_size: searchContextSizeForAttempt(attemptNumber),
       return_token_budget: "default"
     }],
     tool_choice: "required",
@@ -294,11 +318,14 @@ async function performSupplierResearch(job, attemptNumber, maxAttempts) {
 
 function buildResearchPrompt(job, attemptNumber, maxAttempts) {
   const previousSummary = summarizePreviousAttempts(job);
+  const passType = researchPassType(job, attemptNumber);
+  const passInstructions = researchPassInstructions(passType);
 
   return `You are Arcovia's deep supplier-sourcing analyst.
 
 Order: ${job.orderName}
 Deep sourcing check: ${attemptNumber} of ${maxAttempts}
+Research pass type: ${passType}
 
 Customer request:
 ${job.productRequest}
@@ -307,7 +334,10 @@ Previous checks:
 ${previousSummary}
 
 Objective:
-Find every realistic way Arcovia can source this requested product. Do not stop at normal Google-style surface results.
+Find every realistic way Arcovia can source this requested product. The first check must be one super-deep search that finds as many real choices as possible, not a small surface-level search. Do not stop at normal Google-style surface results.
+
+Pass-specific instruction:
+${passInstructions}
 
 Search lanes to cover:
 1. Online stores and product pages, including local South African stores and international stores.
@@ -316,6 +346,7 @@ Search lanes to cover:
 4. Cross-border options where the product can be shipped to South Africa.
 5. Shipping agents, freight forwarders, or parcel-forwarding services that can help import from other countries.
 6. Trust/background checks for each candidate: customer reviews, HelloPeter where relevant, social media, public complaints, delivery/payment claims, business identity, contact details, domain/website consistency, refund policy, and counterfeit/scam red flags.
+7. Alternate product wording, brand/style variants, spelling variations, model numbers, image/product-code clues in the customer text, and country-specific search terms.
 
 Rules:
 - Include candidates above the customer's budget too, because they may be the only available options.
@@ -324,7 +355,7 @@ Rules:
 - Do not invent availability, prices, reviews, addresses, social pages, or ratings.
 - If a price is visible, include currency and total estimate. If shipping/import fees are separate, note that.
 - Sort final trusted sources from most expensive to cheapest.
-- Return at most ${config.maxResearchCandidates} final trusted/needs-more-checks sources, up to 6 shipping agents, and up to 12 rejected sources.
+- Return at most ${finalSourceLimit()} final trusted/needs-more-checks sources, up to 8 shipping agents, and up to 20 rejected sources.
 - Keep each evidence summary under 220 characters so the JSON finishes within the token budget.
 - Prefer official retailers, established marketplaces, verified physical shops, authorized distributors, and suppliers with clear delivery proof.
 - Keep wording factual. Do not make defamatory claims; describe evidence and red flags internally.
@@ -387,7 +418,7 @@ Return this JSON shape:
 function dryRunResearch(job, attemptNumber) {
   const completedAt = new Date().toISOString();
   return {
-    summary: "Dry run: OpenAI API key not configured. The job was created and the repeated deep-research loop is ready, but live supplier research is waiting for OPENAI_API_KEY.",
+    summary: "Dry run: OpenAI API key not configured. The job was created and the super-deep research policy is ready, but live supplier research is waiting for OPENAI_API_KEY.",
     missingCustomerDetails: [],
     suppliers: [],
     candidateSources: [],
@@ -417,7 +448,7 @@ function mergeResearch(previous, current) {
     summary: current.summary,
     missingCustomerDetails: uniqueStrings([...(previous?.missingCustomerDetails || []), ...current.missingCustomerDetails]),
     suppliers: sortByMostExpensiveFirst(uniqueByIdentity([...(previous?.suppliers || []), ...current.suppliers])),
-    candidateSources: sortByMostExpensiveFirst(uniqueByIdentity([...(previous?.candidateSources || []), ...current.candidateSources])).slice(0, config.maxResearchCandidates * maxResearchAttempts()),
+    candidateSources: sortByMostExpensiveFirst(uniqueByIdentity([...(previous?.candidateSources || []), ...current.candidateSources])).slice(0, finalSourceLimit() * maxResearchAttempts()),
     rejectedSources: uniqueByIdentity([...(previous?.rejectedSources || []), ...current.rejectedSources]).slice(0, 50),
     shippingAgents: uniqueByIdentity([...(previous?.shippingAgents || []), ...current.shippingAgents]).slice(0, 20),
     webSources: uniqueByUrl([...(previous?.webSources || []), ...current.webSources]).slice(0, 100),
@@ -665,7 +696,146 @@ function summarizeUnstructuredResult(text) {
 }
 
 function maxResearchAttempts() {
-  return Math.max(1, Math.floor(Number(config.deepResearchMaxAttempts || 10)));
+  const configured = Math.max(1, Math.floor(Number(config.deepResearchMaxAttempts || policyMaxAttempts())));
+  return Math.max(noMatchAttemptLimit(), Math.min(configured, policyMaxAttempts()));
+}
+
+function policyMaxAttempts() {
+  return noMatchAttemptLimit() + confirmationChecksAfterFound();
+}
+
+function noMatchRetryCount() {
+  return Math.max(0, Math.floor(Number(config.deepResearchNoMatchRetries ?? 2)));
+}
+
+function noMatchAttemptLimit() {
+  return 1 + noMatchRetryCount();
+}
+
+function confirmationChecksAfterFound() {
+  return Math.max(0, Math.floor(Number(config.deepResearchConfirmationChecksAfterFound ?? 1)));
+}
+
+function finalSourceLimit() {
+  return Math.max(25, Math.floor(Number(config.maxResearchCandidates || 25)));
+}
+
+function hasCompletedResearchPolicy(job) {
+  const completedAttempts = Number(job.researchAttemptCount || 0);
+  const trustedSupplierCount = Number(job.research?.suppliers?.length || 0);
+  if (trustedSupplierCount > 0) {
+    return completedAttempts >= firstTrustedAttempt(job, completedAttempts || 1) + confirmationChecksAfterFound();
+  }
+  return completedAttempts >= noMatchAttemptLimit();
+}
+
+function settleCompletedPolicyJob(job) {
+  const trustedSupplierCount = Number(job.research?.suppliers?.length || 0);
+  const now = new Date().toISOString();
+
+  if (trustedSupplierCount > 0) {
+    const changed = job.status !== "human_review" || job.nextResearchAt || !job.researchCompletedAt || job.currentResearchAttempt;
+    job.status = "human_review";
+    job.currentResearchAttempt = null;
+    job.nextResearchAt = null;
+    job.researchCompletedAt ||= now;
+    if (changed) {
+      addTimeline(job, "research_completed", "Saved job already satisfies the new deep-search policy. No further AI checks are scheduled unless Arcovia requeues it.");
+    }
+    upsertJob(job);
+    return;
+  }
+
+  const changed = job.status !== "refund_due" || job.nextResearchAt || job.currentResearchAttempt;
+  job.status = "refund_due";
+  job.refundStatus = "manual_refund_required";
+  job.refundReason ||= `No trusted source found after the initial super-deep search and ${noMatchRetryCount()} retry search(es).`;
+  job.currentResearchAttempt = null;
+  job.nextResearchAt = null;
+  job.nextUpdateAt = null;
+  job.researchCompletedAt ||= now;
+  if (changed) {
+    addTimeline(job, "refund_due", job.refundReason);
+  }
+  upsertJob(job);
+}
+
+function shouldRunConfirmationSearch(job, attemptNumber, trustedSupplierCount) {
+  if (trustedSupplierCount <= 0) return false;
+  const firstFoundAttempt = firstTrustedAttempt(job, attemptNumber);
+  const requiredAttempt = Math.min(firstFoundAttempt + confirmationChecksAfterFound(), maxResearchAttempts());
+  return attemptNumber < requiredAttempt;
+}
+
+function firstTrustedAttempt(job, fallbackAttempt) {
+  const explicit = Number(job.researchFirstFoundAttempt || 0);
+  if (explicit > 0) return explicit;
+  const previousAttempt = (job.researchAttempts || [])
+    .filter((attempt) => Number(attempt.trustedSupplierCount || 0) > 0)
+    .map((attempt) => Number(attempt.attempt || 0))
+    .filter((attempt) => attempt > 0)
+    .sort((a, b) => a - b)[0];
+  if (previousAttempt) return previousAttempt;
+  if (Number(job.research?.suppliers?.length || 0) > 0 && Number(job.researchAttemptCount || 0) > 0) {
+    return Number(job.researchAttemptCount || 0);
+  }
+  return Math.max(1, Number(fallbackAttempt || 1));
+}
+
+function researchPassType(job, attemptNumber) {
+  if (attemptNumber === 1) return "primary_super_deep_search";
+  if (Number(job.research?.suppliers?.length || 0) > 0 || Number(job.researchFirstFoundAttempt || 0) > 0) {
+    return "confirmation_expansion_search";
+  }
+  return "no_match_retry_search";
+}
+
+function researchPassTitle(job, attemptNumber) {
+  const labels = {
+    primary_super_deep_search: "Primary super-deep sourcing search",
+    confirmation_expansion_search: "Supplier expansion/confirmation search",
+    no_match_retry_search: "No-match retry sourcing search"
+  };
+  return labels[researchPassType(job, attemptNumber)] || "Deep sourcing check";
+}
+
+function researchPassInstructions(passType) {
+  if (passType === "primary_super_deep_search") {
+    return [
+      "This is the main search. Spend the effort here.",
+      "Use multiple search angles before writing the JSON: exact item, category terms, local South African availability, international stores, marketplaces, suppliers/distributors, physical shop leads, and shipping-agent options.",
+      "Return a broad shortlist of real choices and reject unsafe choices with evidence."
+    ].join(" ");
+  }
+  if (passType === "confirmation_expansion_search") {
+    return [
+      "A previous pass already found possible suppliers.",
+      "Do not simply repeat the same sources. Search for missed alternatives, cheaper/more expensive options, physical-store leads, international suppliers, and extra trust evidence for the strongest choices.",
+      "Keep previously safe choices only if you can add useful evidence or a better price/availability detail."
+    ].join(" ");
+  }
+  return [
+    "Previous passes did not find a trusted supplier.",
+    "Retry with different wording, broader category terms, spelling/model variants, marketplace-specific searches, distributor/importer searches, and physical-store leads.",
+    "If nothing trustworthy exists, return no trusted sources and include rejected/unsafe leads with reasons."
+  ].join(" ");
+}
+
+function outputTokenBudgetForAttempt(attemptNumber) {
+  const configured = Math.max(1, Number(config.openaiMaxOutputTokens || 0));
+  const minimum = attemptNumber === 1 ? 12000 : 9000;
+  return Math.max(configured, minimum);
+}
+
+function searchContextSizeForAttempt(_attemptNumber) {
+  return strongestSearchContext(config.openaiWebSearchContextSize, "high");
+}
+
+function strongestSearchContext(configured, minimum) {
+  const order = ["low", "medium", "high"];
+  const configuredValue = order.includes(lower(configured)) ? lower(configured) : "low";
+  const minimumValue = order.includes(lower(minimum)) ? lower(minimum) : "high";
+  return order[Math.max(order.indexOf(configuredValue), order.indexOf(minimumValue))];
 }
 
 function researchRetryDelayMinutes() {

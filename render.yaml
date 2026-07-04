@@ -24,11 +24,11 @@ services:
       - key: OPENAI_MODEL
         value: gpt-5.5
       - key: OPENAI_MAX_OUTPUT_TOKENS
-        value: "5000"
+        value: "12000"
       - key: OPENAI_REASONING_EFFORT
         value: low
       - key: OPENAI_WEB_SEARCH_CONTEXT_SIZE
-        value: low
+        value: high
       - key: RESEND_API_KEY
         sync: false
       - key: FROM_EMAIL
@@ -40,12 +40,16 @@ services:
       - key: MAX_SOURCING_DAYS
         value: "14"
       - key: DEEP_RESEARCH_MAX_ATTEMPTS
-        value: "10"
+        value: "4"
+      - key: DEEP_RESEARCH_NO_MATCH_RETRIES
+        value: "2"
+      - key: DEEP_RESEARCH_CONFIRMATION_CHECKS_AFTER_FOUND
+        value: "1"
       - key: RESEARCH_RETRY_DELAY_MINUTES
         value: "5"
       - key: RESEARCH_TECHNICAL_RETRY_DELAY_MINUTES
         value: "15"
       - key: DEEP_RESEARCH_MAX_CANDIDATES
-        value: "12"
+        value: "25"
       - key: DEPOSIT_SKU
         value: ARC-DEPOSIT-250,ARC-SOURCE-250

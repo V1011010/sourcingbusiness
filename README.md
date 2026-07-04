@@ -15,7 +15,9 @@ Shopify Flow is the easiest for this store because Arcovia is on Shopify Advance
 - Extracts the product request from order notes, line-item properties, or Flow payload fields.
 - If the customer did not provide product details, sends them a unique intake form link.
 - Runs AI deep web research with supplier trust checks.
-- Repeats sourcing checks up to 10 times if no trusted source passes review.
+- Runs one super-deep sourcing search first.
+- If no trusted source is found, retries up to 2 more times with different search angles.
+- If a trusted source is found, runs 1 extra expansion/confirmation search to catch more choices before Arcovia picks a supplier.
 - Checks for review, complaint, and trust signals such as:
   - supplier website and product match
   - online stores, physical stores, marketplaces, distributors, importers, and wholesalers
@@ -31,7 +33,7 @@ Shopify Flow is the easiest for this store because Arcovia is on Shopify Advance
 - Sends regular customer updates while the search is in progress.
 - Sends the internal supplier report to Arcovia for human approval.
 - Never buys from a supplier automatically.
-- If all 10 checks finish with no trusted source, marks the job `refund_due` and emails Arcovia/customer. The actual payment refund is still a manual Shopify/PayFast action until refund automation is separately tested.
+- If the initial super-deep search plus the no-match retries finish with no trusted source, marks the job `refund_due` and emails Arcovia/customer. The actual payment refund is still a manual Shopify/PayFast action until refund automation is separately tested.
 
 ## Local setup
 
@@ -48,10 +50,12 @@ Fill in `.env`:
 - `ARCOVIA_FLOW_SECRET`
 - `RESEND_API_KEY` if you want real emails
 - `ADMIN_EMAIL`
-- `DEEP_RESEARCH_MAX_ATTEMPTS` defaults to `10`
-- `RESEARCH_RETRY_DELAY_MINUTES` defaults to `0`, which spreads retries across `MAX_SOURCING_DAYS`
-- `OPENAI_WEB_SEARCH_CONTEXT_SIZE` defaults to `low` so hosted web search stays within the current OpenAI rate limits
-- `RESEARCH_TECHNICAL_RETRY_DELAY_MINUTES` defaults to `15`; technical API/rate-limit errors retry quickly and do not count as one of the 10 sourcing checks
+- `DEEP_RESEARCH_MAX_ATTEMPTS` defaults to `4`: first super-deep search, up to 2 no-match retries, and 1 expansion check after the first trusted match
+- `DEEP_RESEARCH_NO_MATCH_RETRIES` defaults to `2`
+- `DEEP_RESEARCH_CONFIRMATION_CHECKS_AFTER_FOUND` defaults to `1`
+- `RESEARCH_RETRY_DELAY_MINUTES` defaults to `5`
+- `OPENAI_WEB_SEARCH_CONTEXT_SIZE` defaults to `high` for the super-deep sourcing pass
+- `RESEARCH_TECHNICAL_RETRY_DELAY_MINUTES` defaults to `15`; technical API/rate-limit errors retry quickly and do not count as one of the sourcing checks
 
 Start:
 

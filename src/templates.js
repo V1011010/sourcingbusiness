@@ -53,7 +53,7 @@ export function stageUpdate(job) {
     awaiting_brief: "We are waiting for your product brief so we can begin the supplier search.",
     researching: "We are still searching across online stores, physical stores, marketplaces, suppliers, distributors, reviews, complaint sites, social signals, and shipping options.",
     vetting: "We have found possible suppliers and are checking authenticity, reviews, complaint history, and social presence.",
-    human_review: "Supplier options are under internal review while the AI continues the remaining deep research checks.",
+    human_review: "Supplier options are under internal review. If the policy still requires it, the AI will run one extra expansion check for more choices before Arcovia picks a supplier.",
     supplier_selected: "Arcovia has selected a supplier/source for internal follow-up. We will confirm the final quote and next steps before any purchase is made.",
     quote_ready: "Your sourcing result is ready. Arcovia will contact you with the quote and next steps.",
     no_match: "We have not found a trustworthy match yet. If we cannot find one within the sourcing window, the refundable-deposit rule applies.",
@@ -127,7 +127,7 @@ Evidence: ${Array.isArray(source.evidence_urls) ? source.evidence_urls.join(", "
 Order: ${job.orderName}
 Customer: ${job.customerName || "n/a"} <${job.customerEmail || "n/a"}>
 Phone number: ${job.customerPhone || "n/a"}
-Research attempts: ${job.researchAttemptCount || 0}/${job.maxResearchAttempts || config.deepResearchMaxAttempts}
+Research attempts: ${job.researchAttemptCount || 0}/${displayMaxAttempts(job)}
 Trusted suppliers: ${suppliers.length}
 Candidate sources checked: ${candidates.length}
 Rejected unsafe/untrusted sources: ${rejected.length}
@@ -161,7 +161,7 @@ export function adminRefundDue(job) {
 Order: ${job.orderName}
 Customer: ${job.customerName || "n/a"} <${job.customerEmail || "n/a"}>
 Status: ${job.status}
-Research attempts: ${job.researchAttemptCount || 0}/${job.maxResearchAttempts || config.deepResearchMaxAttempts}
+Research attempts: ${job.researchAttemptCount || 0}/${displayMaxAttempts(job)}
 Reason: ${job.refundReason || "No trusted source found."}
 
 Candidate sources checked: ${job.research?.candidateSources?.length || 0}
@@ -214,10 +214,20 @@ Fix the API/config issue, then retry the paid-order webhook or ask Codex to repr
 
 function researchProgressLine(job) {
   const attempt = job.researchAttemptCount || 0;
-  const maxAttempts = job.maxResearchAttempts || config.deepResearchMaxAttempts;
+  const maxAttempts = displayMaxAttempts(job);
+  const noMatchRetries = Math.max(0, Math.floor(Number(config.deepResearchNoMatchRetries || 2)));
+  const confirmationChecks = Math.max(0, Math.floor(Number(config.deepResearchConfirmationChecksAfterFound || 1)));
   const nextResearchAt = job.nextResearchAt
     ? new Date(job.nextResearchAt).toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg" })
     : "";
-  const base = attempt ? `Research checks completed: ${attempt}/${maxAttempts}.` : "";
+  const base = attempt ? `Research checks completed: ${attempt}/${maxAttempts}. Policy: one super-deep search first, up to ${noMatchRetries} retry search(es) only if no trusted source is found, and ${confirmationChecks} extra expansion check after the first trusted match.` : "";
   return [base, nextResearchAt ? `Next check: ${nextResearchAt}.` : ""].filter(Boolean).join(" ");
+}
+
+function displayMaxAttempts(job) {
+  const noMatchRetries = Math.max(0, Math.floor(Number(config.deepResearchNoMatchRetries || 2)));
+  const confirmationChecks = Math.max(0, Math.floor(Number(config.deepResearchConfirmationChecksAfterFound || 1)));
+  const policyMax = 1 + noMatchRetries + confirmationChecks;
+  const configuredMax = Math.max(1, Math.floor(Number(config.deepResearchMaxAttempts || policyMax)));
+  return Math.max(1 + noMatchRetries, Math.min(job.maxResearchAttempts || configuredMax, policyMax));
 }

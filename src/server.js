@@ -2,7 +2,7 @@ import http from "node:http";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { config } from "./config.js";
 import { sendEmail } from "./email.js";
-import { isResearchRunning, queueDueResearchAttempts, queueResearch } from "./research.js";
+import { isResearchRunning, queueDueResearchAttempts, queueResearch, researchPolicySummary } from "./research.js";
 import { fetchShopifyOrderDetails } from "./shopify.js";
 import { adminRefundDue, customerRefundDue, depositReceived, stageUpdate } from "./templates.js";
 import { addTimeline, getJob, readJobs, upsertJob } from "./storage.js";
@@ -12,6 +12,7 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
     if (req.method === "GET" && url.pathname === "/health") {
+      const researchPolicy = researchPolicySummary();
       return json(res, 200, {
         ok: true,
         service: "arcovia-ai-sourcing",
@@ -21,11 +22,15 @@ const server = http.createServer(async (req, res) => {
           safeOrderResearchRetry: true,
           cappedOpenAIResearchTokens: true,
           deepResearchLoop: true,
-          deepResearchMaxAttempts: config.deepResearchMaxAttempts,
-          deepResearchSearchContextSize: config.openaiWebSearchContextSize,
+          deepResearchPolicy: researchPolicy,
+          deepResearchMaxAttempts: researchPolicy.maxTotalAttempts,
+          deepResearchSearchContextSize: "high",
           deepResearchReasoningEffort: config.openaiReasoningEffort,
-          deepResearchMaxOutputTokens: config.openaiMaxOutputTokens,
-          continuousResearchUntilMaxAttempts: true,
+          deepResearchMaxOutputTokens: Math.max(config.openaiMaxOutputTokens, 12000),
+          continuousResearchUntilMaxAttempts: false,
+          superDeepFirstSearch: true,
+          retryOnlyIfNoMatch: true,
+          extraConfirmationSearchAfterMatch: true,
           activeResearchRetryMinutes: config.researchRetryDelayMinutes || 5,
           allOrdersSupplierReview: true,
           missingBriefFixLinks: true,
@@ -164,7 +169,7 @@ async function createJobFromOrderPayload(payload, source, options = {}) {
     productRequest,
     status: productRequest ? "researching" : "awaiting_brief",
     researchAttemptCount: 0,
-    maxResearchAttempts: config.deepResearchMaxAttempts,
+    maxResearchAttempts: researchPolicySummary().maxTotalAttempts,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     nextUpdateAt: addHours(now, config.updateIntervalHours).toISOString(),
@@ -595,7 +600,7 @@ function serializeJob(job, details = false) {
     rejectedSourceCount: job.research?.rejectedSources?.length || 0,
     shippingAgentCount: job.research?.shippingAgents?.length || 0,
     researchAttemptCount: job.researchAttemptCount || 0,
-    maxResearchAttempts: job.maxResearchAttempts || config.deepResearchMaxAttempts,
+    maxResearchAttempts: Math.min(job.maxResearchAttempts || researchPolicySummary().maxTotalAttempts, researchPolicySummary().maxTotalAttempts),
     currentResearchAttempt: job.currentResearchAttempt || null,
     researchRunning: Boolean(job.id && isResearchRunning(job.id)),
     nextResearchAt: job.nextResearchAt || null,
@@ -670,6 +675,7 @@ function monitorLoginHtml() {
 }
 
 function monitorJobCard(job, auth = {}) {
+  const maxAttempts = displayMaxResearchAttempts(job);
   const timeline = (job.timeline || []).slice(-6).reverse().map((event) => {
     return `<li><strong>${escapeHtml(formatEventTime(event.at))}</strong><br>${escapeHtml(event.message)}</li>`;
   }).join("");
@@ -719,7 +725,7 @@ function monitorJobCard(job, auth = {}) {
     ${missingBriefLine}
     ${runningLine}
     <div class="stats">
-      <div class="stat"><b>${escapeHtml(`${job.researchAttemptCount}/${job.maxResearchAttempts}`)}</b><span>checks</span></div>
+      <div class="stat"><b>${escapeHtml(`${job.researchAttemptCount}/${maxAttempts}`)}</b><span>checks</span></div>
       <div class="stat"><b>${escapeHtml(job.supplierCount)}</b><span>trusted suppliers</span></div>
       <div class="stat"><b>${escapeHtml(job.candidateSourceCount)}</b><span>candidates</span></div>
       <div class="stat"><b>${escapeHtml(job.rejectedSourceCount)}</b><span>rejected</span></div>
@@ -736,6 +742,7 @@ function monitorJobCard(job, auth = {}) {
 }
 
 function monitorLiteJobCard(job) {
+  const maxAttempts = displayMaxResearchAttempts(job);
   const nextLine = job.nextResearchAt ? `<p class="muted">Next AI check: ${escapeHtml(formatEventTime(job.nextResearchAt))}</p>` : "";
   const completedLine = job.researchCompletedAt ? `<p class="muted">Completed: ${escapeHtml(formatEventTime(job.researchCompletedAt))}</p>` : "";
   const reviewButton = job.reviewLink
@@ -754,7 +761,7 @@ function monitorLiteJobCard(job) {
     ${missingBriefButton}
     ${runningLine}
     <div class="stats">
-      <div class="stat"><b>${escapeHtml(`${job.researchAttemptCount}/${job.maxResearchAttempts}`)}</b><span>checks</span></div>
+      <div class="stat"><b>${escapeHtml(`${job.researchAttemptCount}/${maxAttempts}`)}</b><span>checks</span></div>
       <div class="stat"><b>${escapeHtml(job.supplierCount)}</b><span>trusted suppliers</span></div>
       <div class="stat"><b>${escapeHtml(job.candidateSourceCount)}</b><span>candidates</span></div>
       <div class="stat"><b>${escapeHtml(job.rejectedSourceCount)}</b><span>rejected</span></div>
@@ -768,6 +775,11 @@ function monitorLiteJobCard(job) {
 
 function statusClass(status) {
   return String(status || "unknown").replace(/[^a-z0-9_-]/gi, "_");
+}
+
+function displayMaxResearchAttempts(job) {
+  const policy = researchPolicySummary();
+  return Math.min(job.maxResearchAttempts || policy.maxTotalAttempts, policy.maxTotalAttempts);
 }
 
 function isDepositOrder(payload) {
@@ -1197,7 +1209,7 @@ async function handleBriefSubmit(req, res, token) {
   ].filter(Boolean).join("\n");
   job.status = "researching";
   job.researchAttemptCount = 0;
-  job.maxResearchAttempts = config.deepResearchMaxAttempts;
+  job.maxResearchAttempts = researchPolicySummary().maxTotalAttempts;
   job.currentResearchAttempt = null;
   job.nextResearchAt = null;
   addTimeline(job, "brief_received", "Customer submitted product sourcing brief.");
@@ -1346,7 +1358,8 @@ function briefLinkForStatus(job) {
 
 function researchProgressHtml(job) {
   const attempt = job.researchAttemptCount || 0;
-  const maxAttempts = job.maxResearchAttempts || config.deepResearchMaxAttempts;
+  const policy = researchPolicySummary();
+  const maxAttempts = Math.min(job.maxResearchAttempts || policy.maxTotalAttempts, policy.maxTotalAttempts);
   const current = job.currentResearchAttempt ? `<br>Current check: ${escapeHtml(job.currentResearchAttempt)} of ${escapeHtml(maxAttempts)}` : "";
   const next = job.nextResearchAt ? `<br>Next deep check: ${escapeHtml(formatEventTime(job.nextResearchAt))}` : "";
   const suppliers = job.research?.suppliers?.length || 0;
@@ -1355,7 +1368,7 @@ function researchProgressHtml(job) {
 
   return `<section>
     <h2>Research progress</h2>
-    <p class="muted">Deep checks completed: ${escapeHtml(attempt)} of ${escapeHtml(maxAttempts)}${current}${next}<br>Trusted suppliers waiting for review: ${escapeHtml(suppliers)}<br>Candidate sources checked: ${escapeHtml(candidates)}<br>Unsafe or untrusted sources removed: ${escapeHtml(rejected)}</p>
+    <p class="muted">Deep checks completed: ${escapeHtml(attempt)} of ${escapeHtml(maxAttempts)}${current}${next}<br>Policy: one super-deep search first, up to ${escapeHtml(policy.noMatchRetries)} retry search(es) only if no trusted source is found, and ${escapeHtml(policy.confirmationChecksAfterFound)} extra expansion check after the first trusted match.<br>Trusted suppliers waiting for review: ${escapeHtml(suppliers)}<br>Candidate sources checked: ${escapeHtml(candidates)}<br>Unsafe or untrusted sources removed: ${escapeHtml(rejected)}</p>
   </section>`;
 }
 
