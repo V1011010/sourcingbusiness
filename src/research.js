@@ -42,7 +42,7 @@ export function queueDueResearchAttempts() {
     }
     if (runningJobs.has(job.id)) continue;
     if (job.nextResearchAt && new Date(job.nextResearchAt) > now) {
-      const maxReasonableNext = addMinutes(now, researchRetryDelayMinutes() + 1);
+      const maxReasonableNext = addMinutes(now, allowedScheduleDelayMinutes(job) + 1);
       if (new Date(job.nextResearchAt) > maxReasonableNext) {
         job.nextResearchAt = null;
         addTimeline(job, "research_schedule_shortened", "Next AI research check was moved forward to keep the deep-search policy active.");
@@ -845,6 +845,14 @@ function researchRetryDelayMinutes() {
 
 function technicalRetryDelayMinutes() {
   return Math.max(1, Number(config.researchTechnicalRetryDelayMinutes || 15));
+}
+
+function allowedScheduleDelayMinutes(job) {
+  const latest = (job.timeline || []).at(-1);
+  if (latest?.type === "research_retry_scheduled" && latest?.meta?.technicalError) {
+    return technicalRetryDelayMinutes();
+  }
+  return researchRetryDelayMinutes();
 }
 
 function isTechnicalResearchError(message) {
