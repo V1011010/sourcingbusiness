@@ -211,7 +211,8 @@ export function localWorkerHealthFeatures() {
     localCodexWorkerEnabled: config.localCodexWorkerEnabled,
     localCodexWorkerEndpoints: true,
     localCodexWorkerLeaseMinutes: localWorkerLeaseMinutes(),
-    localCodexWorkerTrustScoreNormalization: "accepts_0_to_1_or_0_to_100"
+    localCodexWorkerTrustScoreNormalization: "accepts_0_to_1_or_0_to_100",
+    silentLocalWorkerReportReplay: true
   };
 }
 
