@@ -207,13 +207,14 @@ The fastest version is to add product-detail fields to the deposit product page 
 The intake form asks for customer details first, then asks the customer to choose a product category. After that, it only shows fields that match the category:
 
 - customer name, email, and phone number
-- category-specific product description
+- category-specific request description, including products, services, manufacturers/factories, and fabrics/textiles
 - category-specific condition choices
 - category-specific preference choices
-- custom follow-up textboxes for that category, such as clothing size, shoe fit, vehicle model/year, machinery power/certifications, or device compatibility
-- item budget and notes/links/photos
+- custom follow-up textboxes for that category, such as clothing size, shoe fit, vehicle model/year, machinery power/certifications, service location/problem details, manufacturing specialty/materials/MOQ, fabric composition/colour/quantity, or device compatibility
+- item, service, manufacturing, or fabric budget and notes/links/photos
 
 For example, machinery uses industrial condition and supplier-authenticity options and does not offer replica-style choices.
+Services ask for the service type, location, timing, problem/event details, provider requirements, and budget. Manufacturers/factories ask for specialty, materials, quantity/MOQ, specs, compliance, and budget. Fabrics/textiles ask for material composition, colour/texture, width/weight/quantity, use case, delivery area, and budget.
 
 ## Safety rules
 

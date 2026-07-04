@@ -42,6 +42,7 @@ const server = http.createServer(async (req, res) => {
           customerSupplierChoiceCapture: true,
           resendDefaultSenderFallback: true,
           resendReplyToAddress: Boolean(config.replyToEmail),
+          expandedCategoryIntake: true,
           missingBriefFixLinks: true,
           refundDueStatus: true,
           adminJobsEndpoint: Boolean(config.adminStatusSecret || config.flowSecret)
@@ -188,9 +189,9 @@ async function createJobFromOrderPayload(payload, source, options = {}) {
   const now = new Date();
   const job = {
     id: randomUUID(),
-    publicToken: randomUUID(),
-    reviewToken: randomUUID(),
-    customerOptionsToken: randomUUID(),
+    publicToken: safeRestoreToken(enrichedPayload.public_token || enrichedPayload.publicToken) || randomUUID(),
+    reviewToken: safeRestoreToken(enrichedPayload.review_token || enrichedPayload.reviewToken) || randomUUID(),
+    customerOptionsToken: safeRestoreToken(enrichedPayload.customer_options_token || enrichedPayload.customerOptionsToken) || randomUUID(),
     source,
     orderId,
     orderName,
@@ -228,8 +229,9 @@ async function createJobFromOrderPayload(payload, source, options = {}) {
 }
 
 async function updateExistingJobFromOrder(existing, payload, productRequest, source, options = {}) {
-  existing.reviewToken ||= randomUUID();
-  existing.customerOptionsToken ||= randomUUID();
+  existing.reviewToken ||= safeRestoreToken(payload.review_token || payload.reviewToken) || randomUUID();
+  existing.customerOptionsToken ||= safeRestoreToken(payload.customer_options_token || payload.customerOptionsToken) || randomUUID();
+  existing.publicToken ||= safeRestoreToken(payload.public_token || payload.publicToken) || randomUUID();
   existing.rawOrder = {
     ...(existing.rawOrder || {}),
     ...payload
@@ -264,6 +266,12 @@ async function updateExistingJobFromOrder(existing, payload, productRequest, sou
 
   upsertJob(existing);
   return existing;
+}
+
+function safeRestoreToken(value) {
+  const token = String(value || "").trim();
+  if (!token) return "";
+  return /^[a-z0-9][a-z0-9_-]{7,80}$/i.test(token) ? token : "";
 }
 
 async function enrichOrderPayload(payload) {
@@ -616,7 +624,7 @@ function handleCustomerOptionsPage(_req, res, token, url) {
   const optionsReady = Boolean(job.researchCompletedAt && suppliers.length);
   const selected = job.customerSelectedOption || null;
   const selectedNotice = selected
-    ? `<div class="notice success"><strong>Your choice was received.</strong><br>You selected ${escapeHtml(selected.optionLabel || `Supplier ${Number(selected.index || 0) + 1}`)}. Arcovia will confirm availability and the final quote before the next payment step.</div>`
+    ? `<div class="notice success"><strong>Your choice was received.</strong><br>You selected ${escapeHtml(selected.optionLabel || customerOptionLabel(job, Number(selected.index || 0)))}. Arcovia will confirm availability and the final quote before the next payment step.</div>`
     : url.searchParams.get("selected") === "1"
       ? `<div class="notice success"><strong>Your choice was received.</strong><br>Arcovia will confirm availability and the final quote before the next payment step.</div>`
       : "";
@@ -698,7 +706,7 @@ async function handleCustomerOptionSelect(req, res) {
   }
 
   if (!job.customerSelectedOption) {
-    const optionLabel = `Supplier ${optionIndex + 1}`;
+    const optionLabel = customerOptionLabel(job, optionIndex);
     job.customerSelectedOption = {
       index: optionIndex,
       optionLabel,
@@ -971,7 +979,7 @@ function monitorJobCard(job, auth = {}) {
     : `<p class="muted">${escapeHtml(job.customerName || "Customer")} ${job.customerEmail ? `· ${escapeHtml(job.customerEmail)}` : ""}</p>`;
   const selected = job.selectedSupplier?.supplier;
   const selectedHtml = selected ? selectedSourceBox(selected, job.selectedSupplier) : "";
-  const customerSelectedHtml = job.customerSelectedOption ? customerSelectedOptionBox(job.customerSelectedOption) : "";
+  const customerSelectedHtml = job.customerSelectedOption ? customerSelectedOptionBox(job.customerSelectedOption, job) : "";
   const missingDetails = (job.missingCustomerDetails || []).slice(0, 5).map((detail) => `<li>${escapeHtml(detail)}</li>`).join("");
   const nextLine = job.nextResearchAt ? `<p class="muted">Next AI check: ${escapeHtml(formatEventTime(job.nextResearchAt))}</p>` : "";
   const completedLine = job.researchCompletedAt ? `<p class="muted">Research completed: ${escapeHtml(formatEventTime(job.researchCompletedAt))}</p>` : "";
@@ -1079,7 +1087,7 @@ function sourceSection({ title, subtitle, items, group, cardType, formAction, fo
 }
 
 function customerOptionCard(source, index, token, selected, job) {
-  const optionLabel = `Supplier ${index + 1}`;
+  const optionLabel = customerOptionLabel(job, index);
   const selectedIndex = Number(selected?.index);
   const isChosen = selected && selectedIndex === index;
   const isLocked = Boolean(selected);
@@ -1101,7 +1109,7 @@ function customerOptionCard(source, index, token, selected, job) {
         <div class="detail"><span>Budget note</span><b>${escapeHtml(overBudget)}</b></div>
         <div class="detail"><span>Image</span><b>${escapeHtml(imageNote)}</b></div>
       </div>
-      <p class="muted">Supplier identity, websites, and sourcing evidence are kept private by Arcovia. Final availability, delivery, and total cost still need confirmation.</p>
+      <p class="muted">Provider/source identity, websites, and sourcing evidence are kept private by Arcovia. Final availability, delivery, and total cost still need confirmation.</p>
       ${isChosen
         ? `<span class="chosen-label">Chosen option</span>`
         : isLocked
@@ -1118,9 +1126,17 @@ function customerOptionCard(source, index, token, selected, job) {
 function customerOptionImageHtml(token, index, job) {
   const imageUrl = customerOptionImageUrl(job, index);
   if (isSafeImageUrl(imageUrl)) {
-    return `<img class="option-image" src="/options-image/${escapeHtml(token)}/${escapeHtml(index)}" alt="${escapeHtml(`Supplier ${index + 1} product image`)}" loading="lazy" />`;
+    return `<img class="option-image" src="/options-image/${escapeHtml(token)}/${escapeHtml(index)}" alt="${escapeHtml(`${customerOptionLabel(job, index)} image`)}" loading="lazy" />`;
   }
   return `<div class="image-fallback">Product image<br>not available</div>`;
+}
+
+function customerOptionLabel(job, index) {
+  const categoryText = `${job?.productRequest || ""} ${job?.rawOrder?.note || ""}`.toLowerCase();
+  if (categoryText.includes("category: services") || categoryText.includes("services near me")) return `Service provider ${index + 1}`;
+  if (categoryText.includes("category: manufacturers") || categoryText.includes("manufacturers & factories")) return `Manufacturer ${index + 1}`;
+  if (categoryText.includes("category: fabrics") || categoryText.includes("fabrics & textiles")) return `Fabric supplier ${index + 1}`;
+  return `Supplier ${index + 1}`;
 }
 
 function customerOptionImageUrl(job, index) {
@@ -1223,9 +1239,9 @@ function selectedSourceBox(source, selectedSupplier) {
   </div>`;
 }
 
-function customerSelectedOptionBox(selectedOption) {
+function customerSelectedOptionBox(selectedOption, job = {}) {
   const source = selectedOption?.supplier || {};
-  const optionLabel = selectedOption?.optionLabel || `Supplier ${Number(selectedOption?.index || 0) + 1}`;
+  const optionLabel = selectedOption?.optionLabel || customerOptionLabel(job, Number(selectedOption?.index || 0));
 
   return `<div class="selected-box">
     <h3>Customer preferred option</h3>
@@ -1562,6 +1578,71 @@ const CATEGORY_CONFIG = {
       { name: "media_condition", label: "Acceptable condition", placeholder: "Example: no missing pages, readable used copy okay, disc must be working, cover condition..." }
     ]
   },
+  services: {
+    label: "Services near me",
+    productLabel: "Service needed",
+    productPlaceholder: "Example: photographer, plumber, electrician, makeup artist, mechanic, tutor, cleaner...",
+    conditionLabel: "When do you need the service?",
+    conditionPlaceholder: "Choose the timing...",
+    conditionOptions: ["Emergency / today", "Within 24-48 hours", "This week", "This month", "Flexible timing"],
+    preferenceLabel: "Most important requirement",
+    preferencePlaceholder: "Choose what matters most...",
+    preferenceOptions: ["Best reviewed provider", "Lowest safe price", "Provider near my location", "Available soonest", "Specialist experience required"],
+    budgetLabel: "Service budget",
+    budgetPlaceholder: "Example: R1,500 total, R500 call-out fee, or quote needed",
+    notesLabel: "Problem or service brief",
+    notesPlaceholder: "Describe what happened, what you need done, access limits, preferred dates, photos/reference links, and anything the provider must know.",
+    detailFields: [
+      { name: "service_location", label: "Service location", placeholder: "Example: Sandton, Johannesburg; Cape Town CBD; exact suburb/address if comfortable...", required: true },
+      { name: "service_problem", label: "Problem or event details", placeholder: "Example: leaking kitchen pipe, wedding photography for 80 guests, car won't start, wall needs painting...", required: true },
+      { name: "service_property_access", label: "Property, access or appointment details", placeholder: "Example: apartment on 3rd floor, gate code needed, parking available, weekend only, business hours only..." },
+      { name: "service_provider_requirements", label: "Provider requirements", placeholder: "Example: registered plumber, portfolio needed, own tools, insurance, female provider preferred, invoice needed..." }
+    ]
+  },
+  manufacturers_factories: {
+    label: "Manufacturers & factories",
+    productLabel: "Product or component to manufacture",
+    productPlaceholder: "Example: leather handbags, metal brackets, custom perfume bottles, uniforms, packaging boxes...",
+    conditionLabel: "Production stage",
+    conditionPlaceholder: "Choose the production stage...",
+    conditionOptions: ["Idea / need manufacturer guidance", "Sample or prototype needed", "Small batch production", "Bulk production", "Existing product needs a new factory"],
+    preferenceLabel: "Factory priority",
+    preferencePlaceholder: "Choose what matters most...",
+    preferenceOptions: ["Specialist factory only", "Lowest safe manufacturing cost", "Local South African factory preferred", "International manufacturer acceptable", "Can help with design/prototype"],
+    budgetLabel: "Manufacturing budget",
+    budgetPlaceholder: "Example: R20,000 first batch, R150 per unit target, quote needed",
+    notesLabel: "Manufacturing brief",
+    notesPlaceholder: "Explain the product, target quality, quantity, materials, packaging, deadlines, and any reference photos/spec sheets.",
+    detailFields: [
+      { name: "manufacturer_specialty", label: "Required manufacturing specialty", placeholder: "Example: leather goods, denim, cosmetics, metal fabrication, plastic injection moulding, packaging, furniture...", required: true },
+      { name: "manufacturer_materials", label: "Materials and finish", placeholder: "Example: full-grain leather, brass hardware, cotton canvas, stainless steel, matte black powder coating...", required: true },
+      { name: "manufacturer_quantity", label: "Quantity, MOQ and scaling plan", placeholder: "Example: 20 samples now, 500 units later; no high MOQ; monthly production needed...", required: true },
+      { name: "manufacturer_specs", label: "Technical specs, samples or reference links", placeholder: "Example: dimensions, tech pack, CAD file, photos, competitor product link, packaging requirements..." },
+      { name: "manufacturer_compliance", label: "Compliance, branding and confidentiality", placeholder: "Example: food-safe materials, SABS/ISO, private label, NDA needed, branded tags, export paperwork..." }
+    ]
+  },
+  fabrics_textiles: {
+    label: "Fabrics & textiles",
+    productLabel: "Fabric or textile needed",
+    productPlaceholder: "Example: black faux leather, 100% cotton fleece, silk satin, denim, upholstery velvet, Lycra...",
+    conditionLabel: "Fabric requirement",
+    conditionPlaceholder: "Choose the fabric requirement...",
+    conditionOptions: ["Specific fabric only", "Closest alternative acceptable", "Bulk roll needed", "Small sample/metres needed", "Supplier must confirm composition"],
+    preferenceLabel: "Sourcing priority",
+    preferencePlaceholder: "Choose what matters most...",
+    preferenceOptions: ["Exact colour/material match", "Local fabric shop preferred", "Wholesale supplier preferred", "Cheapest acceptable option", "Premium quality only"],
+    budgetLabel: "Fabric budget",
+    budgetPlaceholder: "Example: R120 per metre, R3,000 total, quote needed",
+    notesLabel: "Fabric sourcing brief",
+    notesPlaceholder: "Describe the fabric, colour, texture, stretch, weight, use case, quantity, reference photos, and what to avoid.",
+    detailFields: [
+      { name: "fabric_material_composition", label: "Material composition", placeholder: "Example: 100% cotton, wool blend, PU leather, genuine leather, polyester satin, spandex blend...", required: true },
+      { name: "fabric_colour_texture", label: "Colour, texture and finish", placeholder: "Example: matte black, burgundy velvet, ribbed, waterproof, shiny satin, embossed crocodile texture...", required: true },
+      { name: "fabric_quantity_width", label: "Quantity, width and weight", placeholder: "Example: 10 metres, 150cm wide, 280gsm, upholstery weight, sample swatches first...", required: true },
+      { name: "fabric_use_case", label: "What it will be used for", placeholder: "Example: tracksuits, handbags, couches, curtains, uniforms, swimwear, car seats..." },
+      { name: "fabric_location_delivery", label: "Preferred fabric-shop location or delivery area", placeholder: "Example: Johannesburg fabric shops, deliver to Durban, international supplier acceptable..." }
+    ]
+  },
   other: {
     label: "Other / not sure",
     productPlaceholder: "Describe the item as clearly as possible...",
@@ -1635,21 +1716,21 @@ async function handleBriefForm(_req, res, token) {
       <p id="categoryHint" class="hint">After you choose a category, the item name and the right follow-up questions will appear.</p>
 
       <section id="categoryFields" class="panel hidden" aria-live="polite">
-        <label for="product">Item name</label>
+        <label id="productLabel" for="product">Item name</label>
         <input id="product" name="product" required disabled placeholder="Brand, model, item type, or exact product name..." value="${escapeHtml(singleLine(job.productRequest || ""))}" />
 
-        <label for="condition">Preferred condition</label>
+        <label id="conditionLabel" for="condition">Preferred condition</label>
         <select id="condition" name="condition" required disabled></select>
 
-        <label for="preference">Preference</label>
+        <label id="preferenceLabel" for="preference">Preference</label>
         <select id="preference" name="preference" required disabled></select>
 
         <div id="customFields" class="details-grid"></div>
 
-        <label for="budget">Maximum budget</label>
+        <label id="budgetLabel" for="budget">Maximum budget</label>
         <input id="budget" name="budget" disabled placeholder="Example: R2,500 total" />
 
-        <label for="notes">Anything else we must know</label>
+        <label id="notesLabel" for="notes">Anything else we must know</label>
         <textarea id="notes" name="notes" disabled placeholder="What to avoid, preferred suppliers, delivery area..."></textarea>
 
         <button id="submitButton" type="submit" disabled>Submit sourcing brief</button>
@@ -1662,11 +1743,16 @@ async function handleBriefForm(_req, res, token) {
     const categoryLabel = document.getElementById("category_label");
     const categoryFields = document.getElementById("categoryFields");
     const categoryHint = document.getElementById("categoryHint");
+    const productLabel = document.getElementById("productLabel");
     const product = document.getElementById("product");
+    const conditionLabel = document.getElementById("conditionLabel");
     const condition = document.getElementById("condition");
+    const preferenceLabel = document.getElementById("preferenceLabel");
     const preference = document.getElementById("preference");
     const customFields = document.getElementById("customFields");
+    const budgetLabel = document.getElementById("budgetLabel");
     const budget = document.getElementById("budget");
+    const notesLabel = document.getElementById("notesLabel");
     const notes = document.getElementById("notes");
     const submitButton = document.getElementById("submitButton");
 
@@ -1719,15 +1805,27 @@ async function handleBriefForm(_req, res, token) {
       if (!enabled) {
         categoryLabel.value = "";
         categoryHint.textContent = "After you choose a category, the item name and the right follow-up questions will appear.";
+        productLabel.textContent = "Item name";
+        conditionLabel.textContent = "Preferred condition";
+        preferenceLabel.textContent = "Preference";
+        budgetLabel.textContent = "Maximum budget";
+        notesLabel.textContent = "Anything else we must know";
         renderDetailFields([]);
         return;
       }
 
       categoryLabel.value = selected.label;
       categoryHint.textContent = "Good. The questions below now match " + selected.label + ".";
+      productLabel.textContent = selected.productLabel || "Item name";
       product.placeholder = selected.productPlaceholder;
-      fillSelect(condition, selected.conditionOptions, "Choose a matching condition...");
-      fillSelect(preference, selected.preferenceOptions, "Choose the most important preference...");
+      conditionLabel.textContent = selected.conditionLabel || "Preferred condition";
+      preferenceLabel.textContent = selected.preferenceLabel || "Preference";
+      budgetLabel.textContent = selected.budgetLabel || "Maximum budget";
+      notesLabel.textContent = selected.notesLabel || "Anything else we must know";
+      budget.placeholder = selected.budgetPlaceholder || "Example: R2,500 total";
+      notes.placeholder = selected.notesPlaceholder || "What to avoid, preferred suppliers, delivery area...";
+      fillSelect(condition, selected.conditionOptions, selected.conditionPlaceholder || "Choose a matching condition...");
+      fillSelect(preference, selected.preferenceOptions, selected.preferencePlaceholder || "Choose the most important preference...");
       renderDetailFields(selected.detailFields);
     }
 
@@ -1762,12 +1860,12 @@ async function handleBriefSubmit(req, res, token) {
     fieldLine("Customer email", job.customerEmail),
     fieldLine("Customer phone number", job.customerPhone),
     fieldLine("Category", form.get("category_label") || selectedCategory?.label || categoryKey),
-    fieldLine("Item name", form.get("product")),
-    fieldLine("Condition", form.get("condition")),
-    fieldLine("Preference", form.get("preference")),
+    fieldLine(selectedCategory?.productLabel || "Item name", form.get("product")),
+    fieldLine(selectedCategory?.conditionLabel || "Condition", form.get("condition")),
+    fieldLine(selectedCategory?.preferenceLabel || "Preference", form.get("preference")),
     ...detailLines,
-    fieldLine("Maximum budget", form.get("budget")),
-    fieldLine("Notes", form.get("notes"))
+    fieldLine(selectedCategory?.budgetLabel || "Maximum budget", form.get("budget")),
+    fieldLine(selectedCategory?.notesLabel || "Notes", form.get("notes"))
   ].filter(Boolean).join("\n");
   job.status = "researching";
   job.researchAttemptCount = 0;

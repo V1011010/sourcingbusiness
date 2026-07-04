@@ -331,7 +331,7 @@ function buildResearchPrompt(job, attemptNumber, maxAttempts) {
   const passType = researchPassType(job, attemptNumber);
   const passInstructions = researchPassInstructions(passType);
 
-  return `You are Arcovia's deep supplier-sourcing analyst.
+  return `You are Arcovia's deep sourcing analyst.
 
 Order: ${job.orderName}
 Deep sourcing check: ${attemptNumber} of ${maxAttempts}
@@ -344,19 +344,22 @@ Previous checks:
 ${previousSummary}
 
 Objective:
-Find every realistic way Arcovia can source this requested product. The first check must be one super-deep search that finds as many real choices as possible, not a small surface-level search. Do not stop at normal Google-style surface results.
+Find every realistic way Arcovia can source this request. The customer may need a product, local service provider, manufacturer/factory, fabric/textile supplier, wholesaler, distributor, physical store, or import route. The first check must be one super-deep search that finds as many real choices as possible, not a small surface-level search. Do not stop at normal Google-style surface results.
 
 Pass-specific instruction:
 ${passInstructions}
 
 Search lanes to cover:
 1. Online stores and product pages, including local South African stores and international stores.
-2. Physical stores, boutiques, authorized dealers, distributors, wholesalers, importers, and supplier directories.
-3. Marketplaces and reseller platforms only when buyer protection, seller history, and delivery proof are clear.
-4. Cross-border options where the product can be shipped to South Africa.
-5. Shipping agents, freight forwarders, or parcel-forwarding services that can help import from other countries.
-6. Trust/background checks for each candidate: customer reviews, HelloPeter where relevant, social media, public complaints, delivery/payment claims, business identity, contact details, domain/website consistency, refund policy, and counterfeit/scam red flags.
-7. Alternate product wording, brand/style variants, spelling variations, model numbers, image/product-code clues in the customer text, and country-specific search terms.
+2. Local service providers near the requested location when the category is services: photographers, plumbers, electricians, mechanics, cleaners, tutors, beauty providers, event providers, repair services, or similar providers.
+3. Manufacturers/factories/workshops when the customer needs production: specialist capabilities, materials handled, MOQ, sample/prototype support, certifications, private-label/branding support, and local/international factory options.
+4. Fabric/textile sources when the customer needs material: fabric shops, textile wholesalers, mills, leather/fabric specialists, swatches, material composition, width/weight, colour/texture match, and delivery options.
+5. Physical stores, boutiques, authorized dealers, distributors, wholesalers, importers, and supplier directories.
+6. Marketplaces and reseller platforms only when buyer protection, seller history, and delivery proof are clear.
+7. Cross-border options where the product/material can be shipped to South Africa.
+8. Shipping agents, freight forwarders, or parcel-forwarding services that can help import from other countries where relevant.
+9. Trust/background checks for each candidate: customer reviews, HelloPeter where relevant, social media, public complaints, delivery/payment claims, business identity, contact details, domain/website consistency, refund policy, portfolio/project proof, service-area proof, and counterfeit/scam red flags.
+10. Alternate wording, brand/style variants, spelling variations, model numbers, material names, service names, manufacturer capability terms, image/product-code clues in the customer text, and country-specific search terms.
 
 Rules:
 - Include candidates above the customer's budget too, because they may be the only available options.
@@ -380,7 +383,7 @@ Return this JSON shape:
   "sources": [
     {
       "name": "store, supplier, marketplace seller, distributor, or physical shop",
-      "source_type": "online_store | physical_store | supplier | distributor | marketplace | reseller | other",
+      "source_type": "online_store | physical_store | service_provider | manufacturer | factory | fabric_supplier | textile_wholesaler | supplier | distributor | marketplace | reseller | other",
       "url": "product or supplier URL",
       "product_match": "how closely it matches the requested product",
       "image_url": "direct product image URL if confidently available, otherwise blank",
