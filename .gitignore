@@ -2,5 +2,6 @@
 PRIVATE_SETUP_VALUES.txt
 data/*.json
 data/local-codex-worker/
+reference/
 node_modules/
 npm-debug.log*
