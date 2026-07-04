@@ -8,6 +8,10 @@ export function statusLink(job) {
   return `${config.publicBaseUrl.replace(/\/$/, "")}/status/${job.publicToken}`;
 }
 
+export function customerOptionsLink(job) {
+  return `${config.publicBaseUrl.replace(/\/$/, "")}/options/${job.customerOptionsToken}`;
+}
+
 export function depositReceived(job) {
   if (job.productRequest?.trim()) {
     return {
@@ -47,13 +51,35 @@ Arcovia`
   };
 }
 
+export function customerOptionsReady(job) {
+  const suppliers = job.research?.suppliers || [];
+
+  return {
+    subject: `Your Arcovia sourcing options are ready: ${job.orderName}`,
+    text: `Hi ${job.customerName || "there"},
+
+Arcovia has completed the supplier research for your request.
+
+We found ${suppliers.length} approved option${suppliers.length === 1 ? "" : "s"} that passed our initial sourcing checks. For safety and to protect Arcovia's sourcing process, the options are shown anonymously as Supplier 1, Supplier 2, and so on.
+
+You can view the approved options, prices, and product pictures here:
+${customerOptionsLink(job)}
+
+Choose the option you prefer. Arcovia will still confirm final availability, delivery, and the final quote before any purchase is made.
+
+Order: ${job.orderName}
+
+Arcovia`
+  };
+}
+
 export function stageUpdate(job) {
   const status = job.status || "researching";
   const stageMessages = {
     awaiting_brief: "We are waiting for your product brief so we can begin the supplier search.",
     researching: "We are still searching across online stores, physical stores, marketplaces, suppliers, distributors, reviews, complaint sites, social signals, and shipping options.",
     vetting: "We have found possible suppliers and are checking authenticity, reviews, complaint history, and social presence.",
-    human_review: "Supplier options are under internal review. If the policy still requires it, the AI will run one extra expansion check for more choices before Arcovia picks a supplier.",
+    human_review: "Supplier options are under Arcovia review. When the approved shortlist is complete, you will receive a private options link to choose from.",
     supplier_selected: "Arcovia has selected a supplier/source for internal follow-up. We will confirm the final quote and next steps before any purchase is made.",
     quote_ready: "Your sourcing result is ready. Arcovia will contact you with the quote and next steps.",
     no_match: "We have not found a trustworthy match yet. If we cannot find one within the sourcing window, the refundable-deposit rule applies.",
@@ -78,6 +104,34 @@ ${statusLink(job)}
 Order: ${job.orderName}
 
 Arcovia`
+  };
+}
+
+export function customerOptionSelectedAdmin(job) {
+  const selected = job.customerSelectedOption || {};
+  const supplier = selected.supplier || {};
+  const optionLabel = selected.optionLabel || `Supplier ${Number(selected.index || 0) + 1}`;
+
+  return {
+    subject: `Customer selected ${optionLabel}: ${job.orderName}`,
+    text: `Arcovia customer option selected
+
+Order: ${job.orderName}
+Customer: ${job.customerName || "n/a"} <${job.customerEmail || "n/a"}>
+Customer choice shown as: ${optionLabel}
+Selected at: ${selected.selectedAt || "n/a"}
+
+Internal supplier details:
+Supplier/source: ${supplier.name || supplier.supplier_name || "Unnamed supplier"}
+URL: ${supplier.url || "Not provided"}
+Price: ${supplier.price || "n/a"}
+Estimated total in rand: ${displayRandTotal(supplier)}
+Availability: ${supplier.availability || "n/a"}
+Trust score: ${supplier.trust_score ?? "n/a"}
+Risk: ${supplier.risk_level || "n/a"}
+
+Next step:
+Review the selected supplier internally, confirm availability and delivery, then contact the customer with the final quote/payment instructions. Do not order automatically.`
   };
 }
 
@@ -230,4 +284,14 @@ function displayMaxAttempts(job) {
   const policyMax = 1 + noMatchRetries + confirmationChecks;
   const configuredMax = Math.max(1, Math.floor(Number(config.deepResearchMaxAttempts || policyMax)));
   return Math.max(1 + noMatchRetries, Math.min(job.maxResearchAttempts || configuredMax, policyMax));
+}
+
+function displayRandTotal(source) {
+  const direct = source.estimated_total_zar || source.approx_total_zar || source.total_zar || "";
+  if (direct) return direct;
+  const total = source.estimated_total_to_customer || "";
+  if (/\bZAR\b|(^|\s)R\s?\d/i.test(total)) return total;
+  const price = source.price || "";
+  if (/\bZAR\b|(^|\s)R\s?\d/i.test(price)) return price;
+  return total || price || "Needs ZAR estimate";
 }

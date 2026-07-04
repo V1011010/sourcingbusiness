@@ -1,8 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
 import { sendEmail } from "./email.js";
 import {
   adminRefundDue,
   adminReport,
+  customerOptionsReady,
   customerRefundDue,
   researchFailure,
   stageUpdate
@@ -155,7 +157,6 @@ export async function runResearch(jobId) {
 
     if (!hadTrustedBefore) {
       await sendEmail({ to: config.adminEmail, ...adminReport(job) });
-      await sendEmail({ to: job.customerEmail, ...stageUpdate(job) });
     }
     return;
   }
@@ -166,6 +167,7 @@ export async function runResearch(jobId) {
     job.currentResearchAttempt = null;
     job.nextResearchAt = null;
     job.nextUpdateAt = addHours(new Date(), config.updateIntervalHours).toISOString();
+    job.customerOptionsToken ||= randomUUID();
     addTimeline(job, "research_completed", `Deep sourcing is complete under the new policy. Supplier shortlist is ready for Arcovia human review.`, {
       suppliers: trustedSupplierCount,
       attempts: attemptNumber
@@ -173,8 +175,15 @@ export async function runResearch(jobId) {
     upsertJob(job);
 
     await sendEmail({ to: config.adminEmail, ...adminReport(job) });
-    if (!hadTrustedBefore) {
-      await sendEmail({ to: job.customerEmail, ...stageUpdate(job) });
+    if (job.customerEmail && !job.customerOptionsSentAt) {
+      const emailResult = await sendEmail({ to: job.customerEmail, ...customerOptionsReady(job) });
+      if (emailResult.ok) {
+        job.customerOptionsSentAt = new Date().toISOString();
+        addTimeline(job, "customer_options_sent", "Anonymized approved-supplier options link sent to customer after research completion.");
+      } else {
+        addTimeline(job, "customer_options_email_failed", `Customer options email failed: ${emailResult.reason || "unknown email error"}.`);
+      }
+      upsertJob(job);
     }
     return;
   }
@@ -354,6 +363,8 @@ Rules:
 - Reject sources with repeated unresolved no-delivery, refund, counterfeit, fake-store, or payment complaints.
 - Do not invent availability, prices, reviews, addresses, social pages, or ratings.
 - If a price is visible, include currency and total estimate. If shipping/import fees are separate, note that.
+- For every source, include image_url when the product page or marketplace result exposes a real item image URL. Leave it blank if not confidently available.
+- For rejected_sources, also include image_url if a real item image was visible; otherwise return an empty string.
 - Sort final trusted sources from most expensive to cheapest.
 - Return at most ${finalSourceLimit()} final trusted/needs-more-checks sources, up to 8 shipping agents, and up to 20 rejected sources.
 - Keep each evidence summary under 220 characters so the JSON finishes within the token budget.
@@ -371,6 +382,7 @@ Return this JSON shape:
       "source_type": "online_store | physical_store | supplier | distributor | marketplace | reseller | other",
       "url": "product or supplier URL",
       "product_match": "how closely it matches the requested product",
+      "image_url": "direct product image URL if confidently available, otherwise blank",
       "price": "price including currency, and whether shipping/import is included",
       "estimated_total_to_customer": "best estimate including delivery/import if available",
       "over_budget": true,
@@ -407,6 +419,7 @@ Return this JSON shape:
     {
       "name": "rejected source",
       "url": "URL if found",
+      "image_url": "direct product image URL if confidently available, otherwise blank",
       "reason": "short factual reason it was removed",
       "evidence_urls": ["https://..."]
     }
@@ -488,7 +501,9 @@ function normalizeSourceList(sources) {
     source_type: textValue(source.source_type || source.type || "other"),
     url: textValue(source.url || source.product_url || source.website),
     product_match: textValue(source.product_match || source.match),
+    image_url: textValue(source.image_url || source.product_image_url || source.item_image_url || source.image || source.thumbnail_url),
     price: textValue(source.price || source.price_found),
+    estimated_total_zar: textValue(source.estimated_total_zar || source.approx_total_zar || source.total_zar || source.rand_total),
     estimated_total_to_customer: textValue(source.estimated_total_to_customer || source.estimated_total || source.total_cost),
     over_budget: Boolean(source.over_budget),
     availability: textValue(source.availability),
@@ -507,6 +522,7 @@ function normalizeRejectedSources(sources) {
   return listValues(sources).map((source) => ({
     name: textValue(source.name || source.supplier_name || source.store || source.title),
     url: textValue(source.url || source.product_url || source.website),
+    image_url: textValue(source.image_url || source.product_image_url || source.item_image_url || source.image || source.thumbnail_url),
     reason: textValue(source.reason || source.red_flag || source.summary),
     evidence_urls: listValues(source.evidence_urls || source.evidence || source.sources).map(textValue).filter(Boolean)
   })).filter((source) => source.name || source.url || source.reason);
@@ -864,7 +880,7 @@ function sortByMostExpensiveFirst(items) {
 }
 
 function priceSortValue(item) {
-  const value = `${item.estimated_total_to_customer || ""} ${item.price || ""}`;
+  const value = `${item.estimated_total_zar || ""} ${item.estimated_total_to_customer || ""} ${item.price || ""}`;
   const matches = [...value.matchAll(/(?:R|ZAR|USD|US\$|EUR|GBP|£|\$)?\s*([0-9][0-9\s,.]*)/gi)]
     .map((match) => Number(match[1].replace(/\s/g, "").replace(/,/g, "")))
     .filter((number) => Number.isFinite(number));

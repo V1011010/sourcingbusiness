@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
 import { sendEmail } from "./email.js";
-import { adminRefundDue, adminReport, customerRefundDue, stageUpdate } from "./templates.js";
+import { adminRefundDue, adminReport, customerOptionsReady, customerRefundDue } from "./templates.js";
 import { addTimeline, getJob, readJobs, upsertJob } from "./storage.js";
 import { researchPolicySummary } from "./research.js";
 
@@ -147,7 +147,6 @@ export async function handleLocalWorkerReport(req, res) {
 
     if (!hadTrustedBefore && !skipEmails) {
       await sendEmail({ to: config.adminEmail, ...adminReport(job) });
-      await sendEmail({ to: job.customerEmail, ...stageUpdate(job) });
     }
 
     return json(res, 200, { ok: true, status: job.status, suppliers: trustedSupplierCount, next_research_at: job.nextResearchAt });
@@ -157,6 +156,7 @@ export async function handleLocalWorkerReport(req, res) {
     job.status = "human_review";
     job.researchCompletedAt = new Date().toISOString();
     job.nextResearchAt = null;
+    job.customerOptionsToken ||= randomUUID();
     addTimeline(job, "research_completed", "Local Codex sourcing is complete. Supplier shortlist is ready for Arcovia human review.", {
       suppliers: trustedSupplierCount,
       attempts: attemptNumber
@@ -166,8 +166,15 @@ export async function handleLocalWorkerReport(req, res) {
     if (!skipEmails) {
       await sendEmail({ to: config.adminEmail, ...adminReport(job) });
     }
-    if (!hadTrustedBefore && !skipEmails) {
-      await sendEmail({ to: job.customerEmail, ...stageUpdate(job) });
+    if (!skipEmails && job.customerEmail && !job.customerOptionsSentAt) {
+      const emailResult = await sendEmail({ to: job.customerEmail, ...customerOptionsReady(job) });
+      if (emailResult.ok) {
+        job.customerOptionsSentAt = new Date().toISOString();
+        addTimeline(job, "customer_options_sent", "Anonymized approved-supplier options link sent to customer after research completion.");
+      } else {
+        addTimeline(job, "customer_options_email_failed", `Customer options email failed: ${emailResult.reason || "unknown email error"}.`);
+      }
+      upsertJob(job);
     }
 
     return json(res, 200, { ok: true, status: job.status, suppliers: trustedSupplierCount });

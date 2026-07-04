@@ -5,7 +5,7 @@ import { sendEmail } from "./email.js";
 import { isResearchRunning, queueDueResearchAttempts, queueResearch, researchPolicySummary } from "./research.js";
 import { handleLocalWorkerClaim, handleLocalWorkerReport, localWorkerHealthFeatures } from "./local-worker.js";
 import { fetchShopifyOrderDetails } from "./shopify.js";
-import { adminRefundDue, customerRefundDue, depositReceived, stageUpdate } from "./templates.js";
+import { adminRefundDue, customerOptionSelectedAdmin, customerRefundDue, depositReceived, stageUpdate } from "./templates.js";
 import { addTimeline, getJob, readJobs, upsertJob } from "./storage.js";
 
 const server = http.createServer(async (req, res) => {
@@ -37,6 +37,9 @@ const server = http.createServer(async (req, res) => {
           ...localWorkerHealthFeatures(),
           activeResearchRetryMinutes: config.researchRetryDelayMinutes || 5,
           allOrdersSupplierReview: true,
+          anonymizedCustomerOptionsPage: true,
+          anonymizedCustomerImageProxy: true,
+          customerSupplierChoiceCapture: true,
           missingBriefFixLinks: true,
           refundDueStatus: true,
           adminJobsEndpoint: Boolean(config.adminStatusSecret || config.flowSecret)
@@ -78,6 +81,18 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/review/select-supplier") {
       return handleReviewSelectSupplier(req, res);
+    }
+
+    if (req.method === "GET" && url.pathname?.startsWith("/options-image/")) {
+      return handleCustomerOptionImage(req, res, url.pathname);
+    }
+
+    if (req.method === "GET" && url.pathname?.startsWith("/options/")) {
+      return handleCustomerOptionsPage(req, res, decodeURIComponent(url.pathname.split("/").pop() || ""), url);
+    }
+
+    if (req.method === "POST" && url.pathname === "/options/select") {
+      return handleCustomerOptionSelect(req, res);
     }
 
     if (req.method === "POST" && url.pathname === "/flow/order-paid") {
@@ -173,6 +188,7 @@ async function createJobFromOrderPayload(payload, source, options = {}) {
     id: randomUUID(),
     publicToken: randomUUID(),
     reviewToken: randomUUID(),
+    customerOptionsToken: randomUUID(),
     source,
     orderId,
     orderName,
@@ -211,6 +227,7 @@ async function createJobFromOrderPayload(payload, source, options = {}) {
 
 async function updateExistingJobFromOrder(existing, payload, productRequest, source, options = {}) {
   existing.reviewToken ||= randomUUID();
+  existing.customerOptionsToken ||= randomUUID();
   existing.rawOrder = {
     ...(existing.rawOrder || {}),
     ...payload
@@ -587,6 +604,156 @@ async function handleReviewSelectSupplier(req, res) {
   return redirect(res, `/review/${encodeURIComponent(reviewToken)}`);
 }
 
+function handleCustomerOptionsPage(_req, res, token, url) {
+  const job = getJobByCustomerOptionsToken(token);
+  if (!job) {
+    return html(res, 404, `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Options link not found</title></head><body><h1>Options link not found</h1><p>This Arcovia options link is not active.</p></body></html>`);
+  }
+
+  const suppliers = job.research?.suppliers || [];
+  const optionsReady = Boolean(job.researchCompletedAt && suppliers.length);
+  const selected = job.customerSelectedOption || null;
+  const selectedNotice = selected
+    ? `<div class="notice success"><strong>Your choice was received.</strong><br>You selected ${escapeHtml(selected.optionLabel || `Supplier ${Number(selected.index || 0) + 1}`)}. Arcovia will confirm availability and the final quote before the next payment step.</div>`
+    : url.searchParams.get("selected") === "1"
+      ? `<div class="notice success"><strong>Your choice was received.</strong><br>Arcovia will confirm availability and the final quote before the next payment step.</div>`
+      : "";
+  const optionCards = optionsReady
+    ? suppliers.map((source, index) => customerOptionCard(source, index, token, selected)).join("")
+    : "";
+
+  return html(res, 200, `<!doctype html>
+<html>
+<head>
+  <title>Arcovia sourcing options</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow" />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:Arial, sans-serif; background:#080406; color:#fff; }
+    header { padding:22px 16px; background:radial-gradient(circle at top right, rgba(122,16,40,.5), transparent 42%), linear-gradient(135deg,#16080d,#320817); border-bottom:1px solid #6b1024; }
+    main { max-width:980px; margin:0 auto; padding:16px; }
+    h1 { margin:0 0 8px; font-size:28px; letter-spacing:-.02em; }
+    h2 { margin:0 0 8px; font-size:19px; }
+    p { line-height:1.5; }
+    .muted { color:#d8b8c0; font-size:14px; }
+    .badge { display:inline-block; margin-top:8px; padding:7px 10px; border-radius:999px; background:#7a1028; color:#fff; font-weight:900; font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+    .notice { border:1px solid #4b1724; background:#12070b; border-radius:16px; padding:14px; margin:14px 0; line-height:1.45; }
+    .notice.success { border-color:#2f8f58; background:#092014; }
+    .options-grid { display:grid; gap:14px; margin-top:16px; }
+    .option-card { display:grid; grid-template-columns:140px minmax(0,1fr); gap:16px; border:1px solid #4b1724; background:#13080c; border-radius:20px; padding:14px; box-shadow:0 12px 30px rgba(0,0,0,.22); }
+    .option-card.chosen { border-color:#2f8f58; background:#07170f; }
+    .option-image { width:140px; height:140px; border-radius:16px; border:1px solid #34111a; object-fit:cover; background:#1a0a0f; display:block; }
+    .image-fallback { width:140px; height:140px; border-radius:16px; border:1px dashed #562033; background:linear-gradient(145deg,#1d0a10,#080406); color:#d8b8c0; display:flex; align-items:center; justify-content:center; text-align:center; font-size:12px; line-height:1.25; padding:10px; }
+    .price { display:inline-block; margin:4px 0 10px; padding:10px 12px; border-radius:14px; background:#7a1028; border:1px solid #bc3456; font-weight:900; }
+    .details { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:10px 0; }
+    .detail { border:1px solid #2d1018; border-radius:12px; padding:9px; background:#0f0609; min-width:0; }
+    .detail span { display:block; color:#d8b8c0; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+    .detail b { display:block; margin-top:3px; color:#fff; overflow-wrap:anywhere; }
+    button { cursor:pointer; border:1px solid #bc3456; background:#7a1028; color:#fff; padding:12px 16px; border-radius:999px; font-weight:900; font-size:15px; }
+    .chosen-label { display:inline-block; border:1px solid #2f8f58; background:#092014; color:#8df0ba; padding:10px 12px; border-radius:999px; font-weight:900; }
+    @media (min-width: 760px) { .options-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    @media (max-width: 620px) {
+      .option-card { grid-template-columns:1fr; }
+      .option-image, .image-fallback { width:100%; height:210px; }
+      .details { grid-template-columns:1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <main>
+      <h1>Your Arcovia sourcing options</h1>
+      <p class="muted">Order ${escapeHtml(job.orderName)}. Supplier details are kept private by Arcovia. Choose by option number, price, and product image.</p>
+      <span class="badge">${escapeHtml(optionsReady ? `${suppliers.length} approved option${suppliers.length === 1 ? "" : "s"}` : "Research not ready yet")}</span>
+    </main>
+  </header>
+  <main>
+    ${selectedNotice}
+    ${optionsReady
+      ? `<div class="notice">These are the approved options from completed research. Prices are estimates until Arcovia confirms live availability, delivery, and the final quote.</div><section class="options-grid">${optionCards}</section>`
+      : `<div class="notice"><strong>Your options are not ready yet.</strong><br>Arcovia is still completing the research/review process. You will receive the options link by email when the approved shortlist is ready.</div>`}
+  </main>
+</body>
+</html>`);
+}
+
+async function handleCustomerOptionSelect(req, res) {
+  const body = await readBody(req);
+  const form = new URLSearchParams(body);
+  const token = String(form.get("token") || "");
+  const optionIndex = Number(form.get("option_index"));
+  const job = getJobByCustomerOptionsToken(token);
+  const supplier = job?.research?.suppliers?.[optionIndex] || null;
+
+  if (!job || !supplier) {
+    return html(res, 404, "<h1>Option not found</h1><p>Go back to the options page and refresh.</p>");
+  }
+
+  if (!job.researchCompletedAt) {
+    return html(res, 400, "<h1>Options are not ready yet</h1><p>Arcovia is still completing the research process.</p>");
+  }
+
+  if (!job.customerSelectedOption) {
+    const optionLabel = `Supplier ${optionIndex + 1}`;
+    job.customerSelectedOption = {
+      index: optionIndex,
+      optionLabel,
+      selectedAt: new Date().toISOString(),
+      supplier
+    };
+    addTimeline(job, "customer_option_selected", `Customer selected ${optionLabel}. Arcovia must still confirm and approve before purchasing.`, {
+      optionIndex,
+      optionLabel,
+      supplierName: supplier.name || "",
+      supplierUrl: supplier.url || ""
+    });
+    upsertJob(job);
+    await sendEmail({ to: config.adminEmail, ...customerOptionSelectedAdmin(job) });
+  }
+
+  return redirect(res, `/options/${encodeURIComponent(token)}?selected=1`);
+}
+
+async function handleCustomerOptionImage(_req, res, pathname) {
+  const parts = pathname.split("/").filter(Boolean);
+  const token = decodeURIComponent(parts[1] || "");
+  const optionIndex = Number(parts[2]);
+  const job = getJobByCustomerOptionsToken(token);
+  const source = job?.research?.suppliers?.[optionIndex] || null;
+  const imageUrl = source?.image_url || source?.product_image_url || source?.item_image_url || source?.image || "";
+
+  if (!job || !source || !isSafeImageUrl(imageUrl)) {
+    return customerImagePlaceholder(res);
+  }
+
+  try {
+    const response = await fetch(imageUrl, {
+      redirect: "follow",
+      headers: {
+        "user-agent": "ArcoviaImageProxy/1.0"
+      }
+    });
+    const contentType = response.headers.get("content-type") || "";
+    if (!response.ok || !contentType.toLowerCase().startsWith("image/")) {
+      return customerImagePlaceholder(res);
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > 5 * 1024 * 1024) return customerImagePlaceholder(res);
+
+    res.writeHead(200, {
+      "Content-Type": contentType,
+      "Cache-Control": "public, max-age=3600",
+      "X-Robots-Tag": "noindex"
+    });
+    res.end(buffer);
+  } catch {
+    customerImagePlaceholder(res);
+  }
+}
+
 function getSelectableSource(job, sourceGroup, sourceIndex) {
   const groups = {
     suppliers: job?.research?.suppliers || [],
@@ -676,10 +843,14 @@ function handleMonitorLitePage(_req, res) {
 }
 
 function serializeJob(job, details = false) {
+  const customerOptionsToken = ensureCustomerOptionsToken(job);
   const base = {
     id: job.id,
     reviewToken: job.reviewToken || null,
     reviewLink: job.reviewToken ? `${config.publicBaseUrl.replace(/\/$/, "")}/review/${job.reviewToken}` : null,
+    customerOptionsToken,
+    customerOptionsLink: customerOptionsToken ? `${config.publicBaseUrl.replace(/\/$/, "")}/options/${customerOptionsToken}` : null,
+    customerOptionsSentAt: job.customerOptionsSentAt || null,
     briefLink: job.publicToken ? `${config.publicBaseUrl.replace(/\/$/, "")}/brief/${job.publicToken}` : null,
     orderId: job.orderId,
     orderName: job.orderName,
@@ -689,6 +860,7 @@ function serializeJob(job, details = false) {
     refundStatus: job.refundStatus || null,
     refundReason: job.refundReason || null,
     selectedSupplier: job.selectedSupplier || null,
+    customerSelectedOption: job.customerSelectedOption || null,
     productRequestPresent: Boolean(job.productRequest?.trim()),
     supplierCount: job.research?.suppliers?.length || 0,
     candidateSourceCount: job.research?.candidateSources?.length || 0,
@@ -742,6 +914,19 @@ function getJobByReviewToken(token) {
   return readJobs().find((job) => job.reviewToken === token);
 }
 
+function getJobByCustomerOptionsToken(token) {
+  if (!token) return null;
+  return readJobs().find((job) => job.customerOptionsToken === token);
+}
+
+function ensureCustomerOptionsToken(job) {
+  if (!job) return "";
+  if (job.customerOptionsToken) return job.customerOptionsToken;
+  job.customerOptionsToken = randomUUID();
+  upsertJob(job);
+  return job.customerOptionsToken;
+}
+
 function monitorLoginHtml() {
   return `<!doctype html>
 <html>
@@ -784,6 +969,7 @@ function monitorJobCard(job, auth = {}) {
     : `<p class="muted">${escapeHtml(job.customerName || "Customer")} ${job.customerEmail ? `· ${escapeHtml(job.customerEmail)}` : ""}</p>`;
   const selected = job.selectedSupplier?.supplier;
   const selectedHtml = selected ? selectedSourceBox(selected, job.selectedSupplier) : "";
+  const customerSelectedHtml = job.customerSelectedOption ? customerSelectedOptionBox(job.customerSelectedOption) : "";
   const missingDetails = (job.missingCustomerDetails || []).slice(0, 5).map((detail) => `<li>${escapeHtml(detail)}</li>`).join("");
   const nextLine = job.nextResearchAt ? `<p class="muted">Next AI check: ${escapeHtml(formatEventTime(job.nextResearchAt))}</p>` : "";
   const completedLine = job.researchCompletedAt ? `<p class="muted">Research completed: ${escapeHtml(formatEventTime(job.researchCompletedAt))}</p>` : "";
@@ -831,6 +1017,7 @@ function monitorJobCard(job, auth = {}) {
   ].join("");
   const quickLinks = [
     job.reviewLink ? `<a class="pill" href="${escapeHtml(job.reviewLink)}">Review link</a>` : "",
+    job.customerOptionsLink ? `<a class="pill" href="${escapeHtml(job.customerOptionsLink)}">Customer options link</a>` : "",
     job.briefLink ? `<a class="pill" href="${escapeHtml(job.briefLink)}">Brief link</a>` : "",
     selected?.url ? `<a class="pill" href="${escapeHtml(selected.url)}" target="_blank" rel="noreferrer">Open selected source</a>` : ""
   ].filter(Boolean).join("");
@@ -861,6 +1048,7 @@ function monitorJobCard(job, auth = {}) {
       ${completedLine}
       ${job.researchSummary ? `<div class="summary-box"><h3>Research summary</h3><p class="muted">${escapeHtml(job.researchSummary)}</p></div>` : ""}
       ${missingDetails ? `<div class="warning-box"><h3>Missing details / questions</h3><ul class="mini-list">${missingDetails}</ul></div>` : ""}
+      ${customerSelectedHtml}
       ${selectedHtml}
       <div class="section-stack">${sourceSections}</div>
       <div class="timeline-wrap">
@@ -886,6 +1074,46 @@ function sourceSection({ title, subtitle, items, group, cardType, formAction, fo
     </summary>
     ${cards ? `<div class="source-grid">${cards}</div>` : `<div class="empty-section">No ${escapeHtml(title.toLowerCase())} captured yet.</div>`}
   </details>`;
+}
+
+function customerOptionCard(source, index, token, selected) {
+  const optionLabel = `Supplier ${index + 1}`;
+  const selectedIndex = Number(selected?.index);
+  const isChosen = selected && selectedIndex === index;
+  const isLocked = Boolean(selected);
+  const overBudget = source.over_budget ? "May be above your stated budget" : "Budget fit not confirmed";
+
+  return `<article class="option-card ${isChosen ? "chosen" : ""}">
+    ${customerOptionImageHtml(token, index, source)}
+    <div>
+      <h2>${escapeHtml(optionLabel)}</h2>
+      <div class="price">Approx total: ${escapeHtml(displayRandTotal(source))}</div>
+      <div class="details">
+        <div class="detail"><span>Listed price</span><b>${escapeHtml(source.price || "Not captured")}</b></div>
+        <div class="detail"><span>Availability</span><b>${escapeHtml(source.availability || "To be confirmed")}</b></div>
+        <div class="detail"><span>Budget note</span><b>${escapeHtml(overBudget)}</b></div>
+        <div class="detail"><span>Next step</span><b>Arcovia confirms final quote</b></div>
+      </div>
+      <p class="muted">Supplier identity, websites, and sourcing evidence are kept private by Arcovia. Final availability, delivery, and total cost still need confirmation.</p>
+      ${isChosen
+        ? `<span class="chosen-label">Chosen option</span>`
+        : isLocked
+          ? `<span class="chosen-label">Another option already chosen</span>`
+          : `<form method="POST" action="/options/select">
+              <input type="hidden" name="token" value="${escapeHtml(token)}" />
+              <input type="hidden" name="option_index" value="${escapeHtml(index)}" />
+              <button type="submit">Choose ${escapeHtml(optionLabel)}</button>
+            </form>`}
+    </div>
+  </article>`;
+}
+
+function customerOptionImageHtml(token, index, source) {
+  const imageUrl = source.image_url || source.product_image_url || source.item_image_url || source.image || "";
+  if (isSafeImageUrl(imageUrl)) {
+    return `<img class="option-image" src="/options-image/${escapeHtml(token)}/${escapeHtml(index)}" alt="${escapeHtml(`Supplier ${index + 1} product image`)}" loading="lazy" />`;
+  }
+  return `<div class="image-fallback">Product image<br>not available</div>`;
 }
 
 function sourceCard(source, index, { group, cardType, formAction, formAuthFields, job }) {
@@ -968,12 +1196,39 @@ function selectedSourceBox(source, selectedSupplier) {
   </div>`;
 }
 
+function customerSelectedOptionBox(selectedOption) {
+  const source = selectedOption?.supplier || {};
+  const optionLabel = selectedOption?.optionLabel || `Supplier ${Number(selectedOption?.index || 0) + 1}`;
+
+  return `<div class="selected-box">
+    <h3>Customer preferred option</h3>
+    <p><strong>${escapeHtml(optionLabel)}</strong> was chosen by the customer${selectedOption?.selectedAt ? ` on ${escapeHtml(formatEventTime(selectedOption.selectedAt))}` : ""}.</p>
+    <p class="muted">Internal mapping: ${escapeHtml(source.name || "Unnamed source")} · ${escapeHtml(displayRandTotal(source))} · Trust ${escapeHtml(displayTrustScore(source))} · Risk ${escapeHtml(source.risk_level || "unknown")}</p>
+    ${source.url ? `<a class="button success" href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">Open customer-chosen source</a>` : ""}
+  </div>`;
+}
+
 function sourceImageHtml(source) {
   const imageUrl = source.image_url || source.product_image_url || source.item_image_url || source.image || "";
   if (isSafeImageUrl(imageUrl)) {
     return `<img class="source-image" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(source.name || "Product image")}" loading="lazy" referrerpolicy="no-referrer" />`;
   }
   return `<div class="image-fallback">No item<br>image yet</div>`;
+}
+
+function customerImagePlaceholder(res) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600" viewBox="0 0 600 600">
+  <rect width="600" height="600" fill="#16080d"/>
+  <rect x="36" y="36" width="528" height="528" rx="44" fill="#0f0609" stroke="#6b1024" stroke-width="6"/>
+  <text x="300" y="286" text-anchor="middle" fill="#d8b8c0" font-family="Arial, sans-serif" font-size="34" font-weight="700">Arcovia</text>
+  <text x="300" y="336" text-anchor="middle" fill="#d8b8c0" font-family="Arial, sans-serif" font-size="22">Product image pending</text>
+</svg>`;
+  res.writeHead(200, {
+    "Content-Type": "image/svg+xml; charset=utf-8",
+    "Cache-Control": "public, max-age=3600",
+    "X-Robots-Tag": "noindex"
+  });
+  res.end(svg);
 }
 
 function displayRandTotal(source) {
@@ -1661,7 +1916,7 @@ function statusLabel(status) {
     awaiting_brief: "Waiting for product details",
     researching: "Searching for product",
     vetting: "Checking suppliers",
-    human_review: "Supplier options ready; still researching",
+    human_review: "Supplier options ready",
     supplier_selected: "Supplier selected",
     quote_ready: "Quote ready",
     no_match: "No match found yet",
