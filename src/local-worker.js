@@ -70,6 +70,7 @@ export async function handleLocalWorkerReport(req, res) {
   if (!isAuthorizedLocalWorker(req)) return json(res, 401, { error: "invalid_worker_secret" });
 
   const body = parseJsonBody(await readBody(req));
+  const skipEmails = req.headers["x-arcovia-skip-emails"] === "1";
   const job = getJob(body.job_id);
   if (!job) return json(res, 404, { error: "job_not_found" });
 
@@ -144,7 +145,7 @@ export async function handleLocalWorkerReport(req, res) {
     });
     upsertJob(job);
 
-    if (!hadTrustedBefore) {
+    if (!hadTrustedBefore && !skipEmails) {
       await sendEmail({ to: config.adminEmail, ...adminReport(job) });
       await sendEmail({ to: job.customerEmail, ...stageUpdate(job) });
     }
@@ -162,8 +163,10 @@ export async function handleLocalWorkerReport(req, res) {
     });
     upsertJob(job);
 
-    await sendEmail({ to: config.adminEmail, ...adminReport(job) });
-    if (!hadTrustedBefore) {
+    if (!skipEmails) {
+      await sendEmail({ to: config.adminEmail, ...adminReport(job) });
+    }
+    if (!hadTrustedBefore && !skipEmails) {
       await sendEmail({ to: job.customerEmail, ...stageUpdate(job) });
     }
 
@@ -184,8 +187,10 @@ export async function handleLocalWorkerReport(req, res) {
     });
     upsertJob(job);
 
-    await sendEmail({ to: config.adminEmail, ...adminRefundDue(job) });
-    await sendEmail({ to: job.customerEmail, ...customerRefundDue(job) });
+    if (!skipEmails) {
+      await sendEmail({ to: config.adminEmail, ...adminRefundDue(job) });
+      await sendEmail({ to: job.customerEmail, ...customerRefundDue(job) });
+    }
     return json(res, 200, { ok: true, status: job.status, suppliers: 0 });
   }
 
