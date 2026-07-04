@@ -25,6 +25,8 @@ const server = http.createServer(async (req, res) => {
           deepResearchSearchContextSize: config.openaiWebSearchContextSize,
           deepResearchReasoningEffort: config.openaiReasoningEffort,
           deepResearchMaxOutputTokens: config.openaiMaxOutputTokens,
+          continuousResearchUntilMaxAttempts: true,
+          allOrdersSupplierReview: true,
           refundDueStatus: true,
           adminJobsEndpoint: Boolean(config.adminStatusSecret || config.flowSecret)
         }
@@ -45,6 +47,10 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/monitor/select-supplier") {
       return handleSelectSupplier(req, res);
+    }
+
+    if (req.method === "GET" && url.pathname === "/review") {
+      return handleReviewAllPage(req, res);
     }
 
     if (req.method === "GET" && url.pathname?.startsWith("/review/")) {
@@ -397,6 +403,63 @@ function handleReviewPage(_req, res, token) {
 </html>`);
 }
 
+function handleReviewAllPage(_req, res) {
+  const jobs = readJobs()
+    .map((job) => {
+      job.reviewToken ||= randomUUID();
+      upsertJob(job);
+      return serializeJob(job, true);
+    })
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  const cards = jobs.map((job) => monitorJobCard(job, { reviewToken: job.reviewToken, hideCustomer: true })).join("");
+
+  return html(res, 200, `<!doctype html>
+<html>
+<head>
+  <title>Arcovia supplier review</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="refresh" content="30" />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: Arial, sans-serif; background:#080406; color:#fff; }
+    header { position:sticky; top:0; z-index:2; padding:18px 16px; background:linear-gradient(135deg,#16080d,#320817); border-bottom:1px solid #6b1024; }
+    main { display:grid; gap:16px; padding:16px; max-width:980px; margin:0 auto; }
+    h1 { margin:0 0 6px; font-size:24px; }
+    h2 { margin:0 0 8px; font-size:20px; }
+    h3 { margin:18px 0 8px; font-size:16px; color:#ffd7df; }
+    p { line-height:1.45; }
+    a { color:#ffd7df; }
+    button { cursor:pointer; }
+    .muted { color:#d8b8c0; font-size:14px; }
+    .button { display:inline-block; text-decoration:none; font-weight:700; color:#fff; background:#7a1028; border:1px solid #bc3456; padding:10px 12px; border-radius:999px; }
+    .card { border:1px solid #6b1024; background:#16080d; border-radius:18px; padding:16px; box-shadow:0 12px 30px rgba(0,0,0,.25); }
+    .status { display:inline-block; padding:7px 10px; border-radius:999px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; font-size:12px; }
+    .researching { background:#8a5b00; }
+    .human_review, .supplier_selected { background:#165c35; }
+    .refund_due, .research_failed { background:#7a1028; }
+    .awaiting_brief { background:#4b5563; }
+    .stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:14px 0; }
+    .stat { background:#0f0609; border:1px solid #3a101b; border-radius:14px; padding:12px; }
+    .stat b { display:block; font-size:22px; }
+    .stat span { color:#d8b8c0; font-size:12px; }
+    .timeline { margin:8px 0 0; padding-left:20px; }
+    .timeline li { margin:0 0 10px; color:#ead7dc; }
+    .supplier { border-top:1px solid #3a101b; padding-top:10px; margin-top:10px; }
+    .supplier-title { font-weight:800; }
+    @media (min-width: 760px) { .stats { grid-template-columns:repeat(5,minmax(0,1fr)); } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Supplier review</h1>
+    <div class="muted">No password. New orders appear here automatically. Do not share this internal page outside Arcovia.</div>
+  </header>
+  <main>${cards || `<div class="card"><h2>No sourcing jobs yet</h2><p class="muted">When new paid deposit orders reach the AI, they will appear here.</p></div>`}</main>
+</body>
+</html>`);
+}
+
 async function handleSelectSupplier(req, res) {
   const body = await readBody(req);
   const form = new URLSearchParams(body);
@@ -472,7 +535,9 @@ function handleMonitorLitePage(_req, res) {
     main { padding:16px; max-width:860px; margin:0 auto; }
     h1 { margin:0 0 6px; font-size:24px; }
     h2 { margin:0 0 8px; font-size:20px; }
+    a { color:#ffd7df; }
     .muted { color:#d8b8c0; font-size:14px; line-height:1.45; }
+    .button { display:inline-block; text-decoration:none; font-weight:700; color:#fff; background:#7a1028; border:1px solid #bc3456; padding:10px 12px; border-radius:999px; }
     .grid { display:grid; gap:14px; }
     .card { border:1px solid #6b1024; background:#16080d; border-radius:18px; padding:16px; box-shadow:0 12px 30px rgba(0,0,0,.25); }
     .status { display:inline-block; padding:7px 10px; border-radius:999px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; font-size:12px; }
@@ -508,6 +573,8 @@ function handleMonitorLitePage(_req, res) {
 function serializeJob(job, details = false) {
   const base = {
     id: job.id,
+    reviewToken: job.reviewToken || null,
+    reviewLink: job.reviewToken ? `${config.publicBaseUrl.replace(/\/$/, "")}/review/${job.reviewToken}` : null,
     orderId: job.orderId,
     orderName: job.orderName,
     customerEmail: job.customerEmail,
@@ -545,7 +612,6 @@ function serializeJob(job, details = false) {
 
   return {
     ...base,
-    reviewLink: job.reviewToken ? `${config.publicBaseUrl.replace(/\/$/, "")}/review/${job.reviewToken}` : null,
     productRequest: job.productRequest || "",
     suppliers: job.research?.suppliers || [],
     candidateSources: job.research?.candidateSources || [],
@@ -662,6 +728,9 @@ function monitorJobCard(job, auth = {}) {
 function monitorLiteJobCard(job) {
   const nextLine = job.nextResearchAt ? `<p class="muted">Next AI check: ${escapeHtml(formatEventTime(job.nextResearchAt))}</p>` : "";
   const completedLine = job.researchCompletedAt ? `<p class="muted">Completed: ${escapeHtml(formatEventTime(job.researchCompletedAt))}</p>` : "";
+  const reviewButton = job.reviewLink
+    ? `<p><a class="button" href="${escapeHtml(job.reviewLink)}">Review suppliers</a></p>`
+    : "";
   const runningLine = job.researchRunning
     ? `<p><strong>AI is working right now.</strong></p>`
     : `<p class="muted">AI is not currently running for this order.</p>`;
@@ -677,6 +746,7 @@ function monitorLiteJobCard(job) {
       <div class="stat"><b>${escapeHtml(job.rejectedSourceCount)}</b><span>rejected</span></div>
       <div class="stat"><b>${escapeHtml(job.shippingAgentCount)}</b><span>shipping agents</span></div>
     </div>
+    ${reviewButton}
     ${nextLine}
     ${completedLine}
   </section>`;
@@ -1285,7 +1355,7 @@ function statusLabel(status) {
     awaiting_brief: "Waiting for product details",
     researching: "Searching for product",
     vetting: "Checking suppliers",
-    human_review: "Supplier research under review",
+    human_review: "Supplier options ready; still researching",
     supplier_selected: "Supplier selected",
     quote_ready: "Quote ready",
     no_match: "No match found yet",

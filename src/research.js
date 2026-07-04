@@ -28,8 +28,10 @@ export function queueResearch(jobId) {
 export function queueDueResearchAttempts() {
   const now = new Date();
   for (const job of readJobs()) {
-    if (job.status !== "researching") continue;
+    if (!["researching", "human_review"].includes(job.status)) continue;
+    if (job.selectedSupplier) continue;
     if (!job.productRequest?.trim()) continue;
+    if (Number(job.researchAttemptCount || 0) >= Number(job.maxResearchAttempts || maxResearchAttempts())) continue;
     if (runningJobs.has(job.id)) continue;
     if (job.nextResearchAt && new Date(job.nextResearchAt) > now) continue;
     queueResearch(job.id);
@@ -44,10 +46,13 @@ export async function runResearch(jobId) {
   const job = getJob(jobId);
   if (!job) throw new Error(`Job not found: ${jobId}`);
   if (!job.productRequest?.trim()) return;
+  if (job.selectedSupplier || job.status === "supplier_selected") return;
 
   const maxAttempts = maxResearchAttempts();
   const attemptNumber = Number(job.researchAttemptCount || 0) + 1;
+  if (attemptNumber > maxAttempts) return;
   const now = new Date();
+  const hadTrustedBefore = Boolean(job.research?.suppliers?.length);
 
   job.status = "researching";
   job.researchStartedAt ||= now.toISOString();
@@ -99,19 +104,45 @@ export async function runResearch(jobId) {
     }
   );
 
+  if (trustedSupplierCount > 0 && attemptNumber < maxAttempts) {
+    const nextResearchAt = addMinutes(new Date(), researchRetryDelayMinutes()).toISOString();
+    job.status = "human_review";
+    job.researchFirstFoundAt ||= new Date().toISOString();
+    job.currentResearchAttempt = null;
+    job.nextResearchAt = nextResearchAt;
+    job.nextUpdateAt = addHours(new Date(), config.updateIntervalHours).toISOString();
+    addTimeline(job, "research_more_scheduled", `Supplier options are ready, but AI will keep researching. Next deep sourcing check ${attemptNumber + 1} of ${maxAttempts} is scheduled for ${formatJohannesburg(nextResearchAt)}.`, {
+      suppliers: trustedSupplierCount,
+      nextResearchAt,
+      nextAttempt: attemptNumber + 1,
+      maxAttempts
+    });
+    upsertJob(job);
+
+    if (!hadTrustedBefore) {
+      await sendEmail({ to: config.adminEmail, ...adminReport(job) });
+      await sendEmail({ to: job.customerEmail, ...stageUpdate(job) });
+    }
+    return;
+  }
+
   if (trustedSupplierCount > 0) {
     job.status = "human_review";
+    job.researchFirstFoundAt ||= new Date().toISOString();
     job.researchCompletedAt = new Date().toISOString();
     job.currentResearchAttempt = null;
     job.nextResearchAt = null;
     job.nextUpdateAt = addHours(new Date(), config.updateIntervalHours).toISOString();
-    addTimeline(job, "trusted_suppliers_found", "Trusted supplier shortlist is ready for Arcovia human review.", {
-      suppliers: trustedSupplierCount
+    addTimeline(job, "research_completed", `All ${maxAttempts} deep sourcing checks are complete. Supplier shortlist is ready for Arcovia human review.`, {
+      suppliers: trustedSupplierCount,
+      attempts: attemptNumber
     });
     upsertJob(job);
 
     await sendEmail({ to: config.adminEmail, ...adminReport(job) });
-    await sendEmail({ to: job.customerEmail, ...stageUpdate(job) });
+    if (!hadTrustedBefore) {
+      await sendEmail({ to: job.customerEmail, ...stageUpdate(job) });
+    }
     return;
   }
 
