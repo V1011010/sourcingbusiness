@@ -39,7 +39,7 @@ export const config = {
   updateIntervalHours: Number(process.env.UPDATE_INTERVAL_HOURS || 6),
   maxSourcingDays: Number(process.env.MAX_SOURCING_DAYS || 14),
   deepResearchMaxAttempts: Number(process.env.DEEP_RESEARCH_MAX_ATTEMPTS || 10),
-  researchRetryDelayMinutes: Number(process.env.RESEARCH_RETRY_DELAY_MINUTES || 0),
+  researchRetryDelayMinutes: Number(process.env.RESEARCH_RETRY_DELAY_MINUTES || 5),
   researchTechnicalRetryDelayMinutes: Number(process.env.RESEARCH_TECHNICAL_RETRY_DELAY_MINUTES || 15),
   maxResearchCandidates: Number(process.env.DEEP_RESEARCH_MAX_CANDIDATES || 12),
   highTrustThreshold: Number(process.env.HIGH_TRUST_THRESHOLD || 75),

@@ -42,7 +42,7 @@ services:
       - key: DEEP_RESEARCH_MAX_ATTEMPTS
         value: "10"
       - key: RESEARCH_RETRY_DELAY_MINUTES
-        value: "0"
+        value: "5"
       - key: RESEARCH_TECHNICAL_RETRY_DELAY_MINUTES
         value: "15"
       - key: DEEP_RESEARCH_MAX_CANDIDATES

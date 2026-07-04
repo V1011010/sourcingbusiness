@@ -26,7 +26,9 @@ const server = http.createServer(async (req, res) => {
           deepResearchReasoningEffort: config.openaiReasoningEffort,
           deepResearchMaxOutputTokens: config.openaiMaxOutputTokens,
           continuousResearchUntilMaxAttempts: true,
+          activeResearchRetryMinutes: config.researchRetryDelayMinutes || 5,
           allOrdersSupplierReview: true,
+          missingBriefFixLinks: true,
           refundDueStatus: true,
           adminJobsEndpoint: Boolean(config.adminStatusSecret || config.flowSecret)
         }
@@ -504,6 +506,9 @@ function markSupplierSelected(job, supplier, supplierIndex) {
   };
   job.status = "supplier_selected";
   job.nextUpdateAt = null;
+  job.nextResearchAt = null;
+  job.currentResearchAttempt = null;
+  job.researchCompletedAt ||= new Date().toISOString();
   addTimeline(job, "supplier_selected", `Arcovia selected supplier/source: ${supplier.name || "Unnamed source"}.`, {
     supplierIndex,
     supplierName: supplier.name || "",
@@ -575,6 +580,7 @@ function serializeJob(job, details = false) {
     id: job.id,
     reviewToken: job.reviewToken || null,
     reviewLink: job.reviewToken ? `${config.publicBaseUrl.replace(/\/$/, "")}/review/${job.reviewToken}` : null,
+    briefLink: job.publicToken ? `${config.publicBaseUrl.replace(/\/$/, "")}/brief/${job.publicToken}` : null,
     orderId: job.orderId,
     orderName: job.orderName,
     customerEmail: job.customerEmail,
@@ -699,6 +705,9 @@ function monitorJobCard(job, auth = {}) {
   }).join("");
   const nextLine = job.nextResearchAt ? `<p class="muted">Next AI check: ${escapeHtml(formatEventTime(job.nextResearchAt))}</p>` : "";
   const completedLine = job.researchCompletedAt ? `<p class="muted">Research completed: ${escapeHtml(formatEventTime(job.researchCompletedAt))}</p>` : "";
+  const missingBriefLine = !job.productRequestPresent && job.briefLink
+    ? `<p><strong>No product details yet.</strong> The AI cannot search this order until the item details are added.</p><p><a class="button" href="${escapeHtml(job.briefLink)}">Add product details</a></p>`
+    : "";
   const runningLine = job.researchRunning
     ? `<p><strong>AI is working right now.</strong> Keep this page open; it refreshes automatically.</p>`
     : `<p class="muted">AI is not currently running for this order.</p>`;
@@ -707,6 +716,7 @@ function monitorJobCard(job, auth = {}) {
     <h2>${escapeHtml(job.orderName || "Unknown order")}</h2>
     <span class="status ${escapeHtml(statusClass(job.status))}">${escapeHtml(statusLabel(job.status))}</span>
     ${customerLine}
+    ${missingBriefLine}
     ${runningLine}
     <div class="stats">
       <div class="stat"><b>${escapeHtml(`${job.researchAttemptCount}/${job.maxResearchAttempts}`)}</b><span>checks</span></div>
@@ -731,6 +741,9 @@ function monitorLiteJobCard(job) {
   const reviewButton = job.reviewLink
     ? `<p><a class="button" href="${escapeHtml(job.reviewLink)}">Review suppliers</a></p>`
     : "";
+  const missingBriefButton = !job.productRequestPresent && job.briefLink
+    ? `<p><strong>No product details yet.</strong></p><p><a class="button" href="${escapeHtml(job.briefLink)}">Add product details</a></p>`
+    : "";
   const runningLine = job.researchRunning
     ? `<p><strong>AI is working right now.</strong></p>`
     : `<p class="muted">AI is not currently running for this order.</p>`;
@@ -738,6 +751,7 @@ function monitorLiteJobCard(job) {
   return `<section class="card">
     <h2>${escapeHtml(job.orderName || "Latest order")}</h2>
     <span class="status ${escapeHtml(statusClass(job.status))}">${escapeHtml(statusLabel(job.status))}</span>
+    ${missingBriefButton}
     ${runningLine}
     <div class="stats">
       <div class="stat"><b>${escapeHtml(`${job.researchAttemptCount}/${job.maxResearchAttempts}`)}</b><span>checks</span></div>

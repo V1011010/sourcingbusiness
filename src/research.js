@@ -33,7 +33,16 @@ export function queueDueResearchAttempts() {
     if (!job.productRequest?.trim()) continue;
     if (Number(job.researchAttemptCount || 0) >= Number(job.maxResearchAttempts || maxResearchAttempts())) continue;
     if (runningJobs.has(job.id)) continue;
-    if (job.nextResearchAt && new Date(job.nextResearchAt) > now) continue;
+    if (job.nextResearchAt && new Date(job.nextResearchAt) > now) {
+      const maxReasonableNext = addMinutes(now, researchRetryDelayMinutes() + 1);
+      if (new Date(job.nextResearchAt) > maxReasonableNext) {
+        job.nextResearchAt = null;
+        addTimeline(job, "research_schedule_shortened", "Next AI research check was moved forward to keep the 10-check process active.");
+        upsertJob(job);
+      } else {
+        continue;
+      }
+    }
     queueResearch(job.id);
   }
 }
@@ -661,8 +670,7 @@ function maxResearchAttempts() {
 
 function researchRetryDelayMinutes() {
   if (Number(config.researchRetryDelayMinutes) > 0) return Number(config.researchRetryDelayMinutes);
-  const spreadAcrossWindow = Math.floor((Number(config.maxSourcingDays || 14) * 24 * 60) / maxResearchAttempts());
-  return Math.max(60, spreadAcrossWindow);
+  return 5;
 }
 
 function technicalRetryDelayMinutes() {
