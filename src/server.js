@@ -621,7 +621,7 @@ function handleCustomerOptionsPage(_req, res, token, url) {
       ? `<div class="notice success"><strong>Your choice was received.</strong><br>Arcovia will confirm availability and the final quote before the next payment step.</div>`
       : "";
   const optionCards = optionsReady
-    ? suppliers.map((source, index) => customerOptionCard(source, index, token, selected)).join("")
+    ? suppliers.map((source, index) => customerOptionCard(source, index, token, selected, job)).join("")
     : "";
 
   return html(res, 200, `<!doctype html>
@@ -724,7 +724,7 @@ async function handleCustomerOptionImage(_req, res, pathname) {
   const optionIndex = Number(parts[2]);
   const job = getJobByCustomerOptionsToken(token);
   const source = job?.research?.suppliers?.[optionIndex] || null;
-  const imageUrl = source?.image_url || source?.product_image_url || source?.item_image_url || source?.image || "";
+  const imageUrl = customerOptionImageUrl(job, optionIndex);
 
   if (!job || !source || !isSafeImageUrl(imageUrl)) {
     return customerImagePlaceholder(res);
@@ -1078,15 +1078,20 @@ function sourceSection({ title, subtitle, items, group, cardType, formAction, fo
   </details>`;
 }
 
-function customerOptionCard(source, index, token, selected) {
+function customerOptionCard(source, index, token, selected, job) {
   const optionLabel = `Supplier ${index + 1}`;
   const selectedIndex = Number(selected?.index);
   const isChosen = selected && selectedIndex === index;
   const isLocked = Boolean(selected);
   const overBudget = source.over_budget ? "May be above your stated budget" : "Budget fit not confirmed";
+  const imageNote = hasSourceImage(source)
+    ? "Option image"
+    : customerOptionImageUrl(job, index)
+      ? "Reference item image"
+      : "Image pending";
 
   return `<article class="option-card ${isChosen ? "chosen" : ""}">
-    ${customerOptionImageHtml(token, index, source)}
+    ${customerOptionImageHtml(token, index, job)}
     <div>
       <h2>${escapeHtml(optionLabel)}</h2>
       <div class="price">Approx total: ${escapeHtml(displayRandTotal(source))}</div>
@@ -1094,7 +1099,7 @@ function customerOptionCard(source, index, token, selected) {
         <div class="detail"><span>Listed price</span><b>${escapeHtml(source.price || "Not captured")}</b></div>
         <div class="detail"><span>Availability</span><b>${escapeHtml(source.availability || "To be confirmed")}</b></div>
         <div class="detail"><span>Budget note</span><b>${escapeHtml(overBudget)}</b></div>
-        <div class="detail"><span>Next step</span><b>Arcovia confirms final quote</b></div>
+        <div class="detail"><span>Image</span><b>${escapeHtml(imageNote)}</b></div>
       </div>
       <p class="muted">Supplier identity, websites, and sourcing evidence are kept private by Arcovia. Final availability, delivery, and total cost still need confirmation.</p>
       ${isChosen
@@ -1110,12 +1115,32 @@ function customerOptionCard(source, index, token, selected) {
   </article>`;
 }
 
-function customerOptionImageHtml(token, index, source) {
-  const imageUrl = source.image_url || source.product_image_url || source.item_image_url || source.image || "";
+function customerOptionImageHtml(token, index, job) {
+  const imageUrl = customerOptionImageUrl(job, index);
   if (isSafeImageUrl(imageUrl)) {
     return `<img class="option-image" src="/options-image/${escapeHtml(token)}/${escapeHtml(index)}" alt="${escapeHtml(`Supplier ${index + 1} product image`)}" loading="lazy" />`;
   }
   return `<div class="image-fallback">Product image<br>not available</div>`;
+}
+
+function customerOptionImageUrl(job, index) {
+  const source = job?.research?.suppliers?.[index] || null;
+  const direct = sourceImageUrl(source);
+  if (isSafeImageUrl(direct)) return direct;
+
+  const fallbackImages = [
+    ...(job?.research?.suppliers || []),
+    ...(job?.research?.candidateSources || [])
+  ]
+    .map(sourceImageUrl)
+    .filter(isSafeImageUrl);
+
+  if (!fallbackImages.length) return "";
+  return fallbackImages[index % fallbackImages.length];
+}
+
+function hasSourceImage(source) {
+  return isSafeImageUrl(sourceImageUrl(source));
 }
 
 function sourceCard(source, index, { group, cardType, formAction, formAuthFields, job }) {
@@ -1211,11 +1236,15 @@ function customerSelectedOptionBox(selectedOption) {
 }
 
 function sourceImageHtml(source) {
-  const imageUrl = source.image_url || source.product_image_url || source.item_image_url || source.image || "";
+  const imageUrl = sourceImageUrl(source);
   if (isSafeImageUrl(imageUrl)) {
     return `<img class="source-image" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(source.name || "Product image")}" loading="lazy" referrerpolicy="no-referrer" />`;
   }
   return `<div class="image-fallback">No item<br>image yet</div>`;
+}
+
+function sourceImageUrl(source) {
+  return source?.image_url || source?.product_image_url || source?.item_image_url || source?.image || "";
 }
 
 function customerImagePlaceholder(res) {

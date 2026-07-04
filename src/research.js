@@ -889,15 +889,37 @@ function priceSortValue(item) {
 }
 
 function uniqueByIdentity(items) {
-  const seen = new Set();
-  const unique = [];
+  const seen = new Map();
   for (const item of items || []) {
     const key = lower(item.url || item.name || JSON.stringify(item));
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    unique.push(item);
+    if (!key) continue;
+    if (!seen.has(key)) {
+      seen.set(key, item);
+      continue;
+    }
+    seen.set(key, mergeDuplicateSource(seen.get(key), item));
   }
-  return unique;
+  return [...seen.values()];
+}
+
+function mergeDuplicateSource(existing, incoming) {
+  const merged = { ...existing };
+  for (const [key, value] of Object.entries(incoming || {})) {
+    if (hasUsefulValue(value) && !hasUsefulValue(merged[key])) {
+      merged[key] = value;
+    }
+  }
+  for (const key of ["image_url", "estimated_total_zar", "estimated_total_to_customer", "price", "availability"]) {
+    if (hasUsefulValue(incoming?.[key])) merged[key] = incoming[key];
+  }
+  return merged;
+}
+
+function hasUsefulValue(value) {
+  if (value === null || value === undefined) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return String(value).trim() !== "";
 }
 
 function uniqueByUrl(items) {
