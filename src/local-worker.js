@@ -298,6 +298,9 @@ Required behavior:
 - Search online stores, physical stores, boutiques, distributors, wholesalers, importers, marketplaces, resellers, and shipping/parcel-forwarding options.
 - Check trust signals for every candidate: customer reviews, HelloPeter where relevant, social media, public complaints, delivery/payment claims, business identity, contact details, refund policy, and counterfeit/scam red flags.
 - Include options above the customer's budget if they are real and relevant.
+- For every source, include image_url when the product page or marketplace result exposes a real item image URL. Leave it blank if not confidently available.
+- For every source, include estimated_total_zar as the approximate total customer cost in South African Rand, including item price, known or estimated shipping, duties, VAT, and handling where possible. If it cannot be estimated, explain briefly such as "Needs checkout quote in ZAR".
+- For rejected_sources, also include image_url if a real item image was visible; otherwise return an empty string.
 - Remove unsafe or untrusted sources from the final sources list and put them under rejected_sources with short factual reasons.
 - Do not invent prices, reviews, addresses, ratings, or availability.
 - Sort final trusted/needs-more-checks sources from most expensive to cheapest.
@@ -383,7 +386,9 @@ function normalizeSourceList(sources) {
     source_type: textValue(source.source_type || source.type || "other"),
     url: textValue(source.url || source.product_url || source.website),
     product_match: textValue(source.product_match || source.match),
+    image_url: textValue(source.image_url || source.product_image_url || source.item_image_url || source.image || source.thumbnail_url),
     price: textValue(source.price || source.price_found),
+    estimated_total_zar: textValue(source.estimated_total_zar || source.approx_total_zar || source.total_zar || source.rand_total),
     estimated_total_to_customer: textValue(source.estimated_total_to_customer || source.estimated_total || source.total_cost),
     over_budget: Boolean(source.over_budget),
     availability: textValue(source.availability),
@@ -402,6 +407,7 @@ function normalizeRejectedSources(sources) {
   return listValues(sources).map((source) => ({
     name: textValue(source.name || source.supplier_name || source.store || source.title),
     url: textValue(source.url || source.product_url || source.website),
+    image_url: textValue(source.image_url || source.product_image_url || source.item_image_url || source.image || source.thumbnail_url),
     reason: textValue(source.reason || source.red_flag || source.summary),
     evidence_urls: listValues(source.evidence_urls || source.evidence || source.sources).map(textValue).filter(Boolean)
   })).filter((source) => source.name || source.url || source.reason);
@@ -459,7 +465,7 @@ function sortByMostExpensiveFirst(items) {
 }
 
 function priceSortValue(item) {
-  const value = `${item.estimated_total_to_customer || ""} ${item.price || ""}`;
+  const value = `${item.estimated_total_zar || ""} ${item.estimated_total_to_customer || ""} ${item.price || ""}`;
   const matches = [...value.matchAll(/(?:R|ZAR|USD|US\$|EUR|GBP|£|\$)?\s*([0-9][0-9\s,.]*)/gi)]
     .map((match) => Number(match[1].replace(/\s/g, "").replace(/,/g, "")))
     .filter((number) => Number.isFinite(number));

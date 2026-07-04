@@ -308,6 +308,66 @@ function handleAdminJobs(req, res, url) {
   json(res, 200, { ok: true, jobs });
 }
 
+function monitorPageStyles() {
+  return `<style>
+    .monitor-shell { max-width:1180px; }
+    .card.pro-card { overflow:hidden; padding:0; }
+    .job-head { display:flex; justify-content:space-between; gap:14px; align-items:flex-start; padding:18px; border-bottom:1px solid #3a101b; background:radial-gradient(circle at top right, rgba(122,16,40,.42), transparent 38%), #16080d; }
+    .job-title { margin:0; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .job-meta { margin-top:8px; color:#d8b8c0; font-size:13px; line-height:1.45; }
+    .job-body { padding:18px; }
+    .summary-box, .selected-box, .warning-box { border:1px solid #4b1724; background:#0f0609; border-radius:16px; padding:14px; margin:14px 0; }
+    .selected-box { border-color:#2f8f58; background:#092014; }
+    .warning-box { border-color:#9b6a16; background:#211505; }
+    .quick-links { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+    .pill { display:inline-flex; align-items:center; gap:6px; border:1px solid #4b1724; background:#10070a; color:#ffd7df; border-radius:999px; padding:7px 10px; font-size:12px; text-decoration:none; }
+    .section-stack { display:grid; gap:12px; margin-top:16px; }
+    details.source-section { border:1px solid #3a101b; border-radius:16px; background:#10070a; overflow:hidden; }
+    details.source-section[open] { border-color:#7a1028; box-shadow:0 12px 26px rgba(0,0,0,.22); }
+    details.source-section > summary { cursor:pointer; list-style:none; display:flex; justify-content:space-between; align-items:center; gap:12px; padding:14px 16px; font-weight:900; color:#fff; background:#16080d; }
+    details.source-section > summary::-webkit-details-marker { display:none; }
+    .section-subtitle { color:#d8b8c0; display:block; font-size:12px; font-weight:500; margin-top:3px; }
+    .count-badge { min-width:34px; text-align:center; border-radius:999px; padding:6px 9px; background:#7a1028; color:#fff; font-weight:900; }
+    .source-grid { display:grid; gap:12px; padding:14px; }
+    .source-card { display:grid; grid-template-columns:88px minmax(0,1fr); gap:14px; border:1px solid #32101a; background:#0b0407; border-radius:16px; padding:12px; }
+    .source-card.rejected { border-color:#4b1724; background:#110609; }
+    .source-card.approved { border-color:#245b3b; background:#07170f; }
+    .source-card.candidate { border-color:#72551d; background:#151006; }
+    .source-image { width:88px; height:88px; border-radius:14px; border:1px solid #34111a; object-fit:cover; background:#1a0a0f; display:block; }
+    .image-fallback { width:88px; height:88px; border-radius:14px; border:1px dashed #562033; background:linear-gradient(145deg,#1d0a10,#080406); color:#d8b8c0; display:flex; align-items:center; justify-content:center; text-align:center; font-size:11px; line-height:1.2; padding:8px; }
+    .source-title { margin:0; font-size:16px; font-weight:900; color:#fff; line-height:1.25; }
+    .source-type { color:#d8b8c0; font-size:12px; margin-top:3px; }
+    .source-metrics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:10px 0; }
+    .metric { border:1px solid #2d1018; border-radius:12px; padding:9px; background:#13080c; min-width:0; }
+    .metric span { display:block; color:#d8b8c0; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+    .metric b { display:block; margin-top:3px; color:#fff; font-size:13px; overflow-wrap:anywhere; }
+    .risk-low { color:#6ee7a8; }
+    .risk-medium, .risk-unknown { color:#f3c56b; }
+    .risk-high, .risk-unsafe { color:#ff8fa3; }
+    .source-note { margin:8px 0 0; color:#ead7dc; font-size:13px; line-height:1.45; }
+    .mini-list { margin:8px 0 0; padding-left:18px; color:#d8b8c0; font-size:12px; line-height:1.45; }
+    .source-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; align-items:center; }
+    .source-actions form { margin:0; }
+    .source-actions button { cursor:pointer; width:auto; }
+    .button.secondary { background:#1b0a10; border-color:#4b1724; }
+    .button.warning { background:#6b3d08; border-color:#b47915; }
+    .button.success { background:#165c35; border-color:#2f8f58; }
+    .empty-section { padding:14px; color:#d8b8c0; }
+    .timeline-wrap { margin-top:16px; }
+    @media (min-width: 760px) {
+      .source-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .source-card.wide { grid-column:1 / -1; }
+      .source-metrics { grid-template-columns:repeat(4,minmax(0,1fr)); }
+    }
+    @media (max-width: 560px) {
+      .job-head { display:block; }
+      .source-card { grid-template-columns:1fr; }
+      .source-image, .image-fallback { width:100%; height:180px; }
+      .source-metrics { grid-template-columns:1fr; }
+    }
+  </style>`;
+}
+
 function handleMonitorPage(_req, res, url) {
   const key = url.searchParams.get("key") || "";
   if (!isValidMonitorKey(key)) {
@@ -357,6 +417,7 @@ function handleMonitorPage(_req, res, url) {
     .supplier-title { font-weight:800; }
     @media (min-width: 760px) { .stats { grid-template-columns:repeat(5,minmax(0,1fr)); } }
   </style>
+  ${monitorPageStyles()}
 </head>
 <body>
   <header>
@@ -366,7 +427,7 @@ function handleMonitorPage(_req, res, url) {
       <a class="button" href="${escapeHtml(refreshUrl)}">Refresh now</a>
     </div>
   </header>
-  <main>
+  <main class="monitor-shell">
     ${cards || `<div class="card"><h2>No sourcing jobs yet</h2><p class="muted">When a paid Shopify deposit triggers the AI, it will appear here.</p></div>`}
   </main>
 </body>
@@ -418,13 +479,14 @@ function handleReviewPage(_req, res, token) {
     .supplier-title { font-weight:800; }
     @media (min-width: 760px) { .stats { grid-template-columns:repeat(5,minmax(0,1fr)); } }
   </style>
+  ${monitorPageStyles()}
 </head>
 <body>
   <header>
     <h1>Supplier review</h1>
     <div class="muted">No password needed. Do not share this link outside Arcovia.</div>
   </header>
-  <main>${card}</main>
+  <main class="monitor-shell">${card}</main>
 </body>
 </html>`);
 }
@@ -475,13 +537,14 @@ function handleReviewAllPage(_req, res) {
     .supplier-title { font-weight:800; }
     @media (min-width: 760px) { .stats { grid-template-columns:repeat(5,minmax(0,1fr)); } }
   </style>
+  ${monitorPageStyles()}
 </head>
 <body>
   <header>
     <h1>Supplier review</h1>
     <div class="muted">No password. New orders appear here automatically. Do not share this internal page outside Arcovia.</div>
   </header>
-  <main>${cards || `<div class="card"><h2>No sourcing jobs yet</h2><p class="muted">When new paid deposit orders reach the AI, they will appear here.</p></div>`}</main>
+  <main class="monitor-shell">${cards || `<div class="card"><h2>No sourcing jobs yet</h2><p class="muted">When new paid deposit orders reach the AI, they will appear here.</p></div>`}</main>
 </body>
 </html>`);
 }
@@ -495,14 +558,15 @@ async function handleSelectSupplier(req, res) {
   }
 
   const jobId = String(form.get("job_id") || "");
+  const sourceGroup = String(form.get("source_group") || "suppliers");
   const supplierIndex = Number(form.get("supplier_index"));
   const job = getJob(jobId);
-  const supplier = job?.research?.suppliers?.[supplierIndex];
+  const supplier = getSelectableSource(job, sourceGroup, supplierIndex);
   if (!job || !supplier) {
     return html(res, 404, "<h1>Supplier not found</h1><p>Go back to the monitor and refresh.</p>");
   }
 
-  markSupplierSelected(job, supplier, supplierIndex);
+  markSupplierSelected(job, supplier, supplierIndex, sourceGroup);
 
   return redirect(res, `/monitor?key=${encodeURIComponent(key)}#${encodeURIComponent(job.id)}`);
 }
@@ -511,20 +575,31 @@ async function handleReviewSelectSupplier(req, res) {
   const body = await readBody(req);
   const form = new URLSearchParams(body);
   const reviewToken = String(form.get("review_token") || "");
+  const sourceGroup = String(form.get("source_group") || "suppliers");
   const supplierIndex = Number(form.get("supplier_index"));
   const job = getJobByReviewToken(reviewToken);
-  const supplier = job?.research?.suppliers?.[supplierIndex];
+  const supplier = getSelectableSource(job, sourceGroup, supplierIndex);
   if (!job || !supplier) {
     return html(res, 404, "<h1>Supplier not found</h1><p>Go back to the review link and refresh.</p>");
   }
 
-  markSupplierSelected(job, supplier, supplierIndex);
+  markSupplierSelected(job, supplier, supplierIndex, sourceGroup);
   return redirect(res, `/review/${encodeURIComponent(reviewToken)}`);
 }
 
-function markSupplierSelected(job, supplier, supplierIndex) {
+function getSelectableSource(job, sourceGroup, sourceIndex) {
+  const groups = {
+    suppliers: job?.research?.suppliers || [],
+    candidateSources: job?.research?.candidateSources || [],
+    rejectedSources: job?.research?.rejectedSources || []
+  };
+  return groups[sourceGroup]?.[sourceIndex] || null;
+}
+
+function markSupplierSelected(job, supplier, supplierIndex, sourceGroup = "suppliers") {
   job.selectedSupplier = {
     index: supplierIndex,
+    sourceGroup,
     selectedAt: new Date().toISOString(),
     supplier
   };
@@ -535,6 +610,7 @@ function markSupplierSelected(job, supplier, supplierIndex) {
   job.researchCompletedAt ||= new Date().toISOString();
   addTimeline(job, "supplier_selected", `Arcovia selected supplier/source: ${supplier.name || "Unnamed source"}.`, {
     supplierIndex,
+    sourceGroup,
     supplierName: supplier.name || "",
     supplierUrl: supplier.url || ""
   });
@@ -643,6 +719,7 @@ function serializeJob(job, details = false) {
   return {
     ...base,
     productRequest: job.productRequest || "",
+    missingCustomerDetails: job.research?.missingCustomerDetails || [],
     suppliers: job.research?.suppliers || [],
     candidateSources: job.research?.candidateSources || [],
     rejectedSources: job.research?.rejectedSources || [],
@@ -706,28 +783,8 @@ function monitorJobCard(job, auth = {}) {
     ? ""
     : `<p class="muted">${escapeHtml(job.customerName || "Customer")} ${job.customerEmail ? `· ${escapeHtml(job.customerEmail)}` : ""}</p>`;
   const selected = job.selectedSupplier?.supplier;
-  const selectedHtml = selected ? `<div class="supplier" style="border-color:#2f8f58;background:#0d2116;">
-      <div class="supplier-title">Selected supplier: ${escapeHtml(selected.name || "Unnamed source")}</div>
-      <div class="muted">${escapeHtml(selected.price || "Price not listed")} · Trust ${escapeHtml(selected.trust_score ?? "n/a")} · ${escapeHtml(selected.risk_level || "risk n/a")}</div>
-      ${selected.url ? `<a href="${escapeHtml(selected.url)}" target="_blank" rel="noreferrer">Open selected supplier/source</a>` : ""}
-    </div>` : "";
-  const suppliers = (job.suppliers || []).slice(0, 8).map((supplier, index) => {
-    const alreadySelected = job.selectedSupplier?.index === index;
-    return `<div class="supplier">
-      <div class="supplier-title">${escapeHtml(index + 1)}. ${escapeHtml(supplier.name || "Unnamed source")}</div>
-      <div class="muted">${escapeHtml(supplier.price || "Price not listed")} · Trust ${escapeHtml(supplier.trust_score ?? "n/a")} · ${escapeHtml(supplier.risk_level || "risk n/a")}</div>
-      ${supplier.estimated_total_to_customer ? `<div class="muted">Estimated total: ${escapeHtml(supplier.estimated_total_to_customer)}</div>` : ""}
-      ${supplier.availability ? `<div class="muted">Availability: ${escapeHtml(supplier.availability)}</div>` : ""}
-      ${supplier.product_match ? `<p class="muted">${escapeHtml(supplier.product_match)}</p>` : ""}
-      ${supplier.url ? `<a href="${escapeHtml(supplier.url)}" target="_blank" rel="noreferrer">Open supplier/source</a>` : ""}
-      <form method="POST" action="${escapeHtml(formAction)}" style="margin-top:10px;">
-        ${formAuthFields}
-        <input type="hidden" name="job_id" value="${escapeHtml(job.id)}" />
-        <input type="hidden" name="supplier_index" value="${escapeHtml(index)}" />
-        <button class="button" type="submit">${alreadySelected ? "Selected" : "Choose this supplier"}</button>
-      </form>
-    </div>`;
-  }).join("");
+  const selectedHtml = selected ? selectedSourceBox(selected, job.selectedSupplier) : "";
+  const missingDetails = (job.missingCustomerDetails || []).slice(0, 5).map((detail) => `<li>${escapeHtml(detail)}</li>`).join("");
   const nextLine = job.nextResearchAt ? `<p class="muted">Next AI check: ${escapeHtml(formatEventTime(job.nextResearchAt))}</p>` : "";
   const completedLine = job.researchCompletedAt ? `<p class="muted">Research completed: ${escapeHtml(formatEventTime(job.researchCompletedAt))}</p>` : "";
   const missingBriefLine = !job.productRequestPresent && job.briefLink
@@ -736,28 +793,228 @@ function monitorJobCard(job, auth = {}) {
   const runningLine = job.researchRunning
     ? `<p><strong>AI is working right now.</strong> Keep this page open; it refreshes automatically.</p>`
     : `<p class="muted">AI is not currently running for this order.</p>`;
+  const sourceSections = [
+    sourceSection({
+      title: "Approved suppliers",
+      subtitle: "Trusted or usable sources that passed the AI's initial checks.",
+      items: job.suppliers || [],
+      group: "suppliers",
+      cardType: "approved",
+      formAction,
+      formAuthFields,
+      job,
+      open: Boolean((job.suppliers || []).length)
+    }),
+    sourceSection({
+      title: "Candidate sources",
+      subtitle: "Possible leads that need human confirmation before quoting the customer.",
+      items: job.candidateSources || [],
+      group: "candidateSources",
+      cardType: "candidate",
+      formAction,
+      formAuthFields,
+      job,
+      open: !Boolean((job.suppliers || []).length) && Boolean((job.candidateSources || []).length)
+    }),
+    sourceSection({
+      title: "Rejected suppliers",
+      subtitle: "Sources removed because of stock, match, safety, trust, or availability issues. You can still override one manually.",
+      items: job.rejectedSources || [],
+      group: "rejectedSources",
+      cardType: "rejected",
+      formAction,
+      formAuthFields,
+      job,
+      open: false
+    }),
+    shippingAgentSection(job.shippingAgents || [])
+  ].join("");
+  const quickLinks = [
+    job.reviewLink ? `<a class="pill" href="${escapeHtml(job.reviewLink)}">Review link</a>` : "",
+    job.briefLink ? `<a class="pill" href="${escapeHtml(job.briefLink)}">Brief link</a>` : "",
+    selected?.url ? `<a class="pill" href="${escapeHtml(selected.url)}" target="_blank" rel="noreferrer">Open selected source</a>` : ""
+  ].filter(Boolean).join("");
 
-  return `<section class="card">
-    <h2>${escapeHtml(job.orderName || "Unknown order")}</h2>
-    <span class="status ${escapeHtml(statusClass(job.status))}">${escapeHtml(statusLabel(job.status))}</span>
-    ${customerLine}
-    ${missingBriefLine}
-    ${runningLine}
-    <div class="stats">
-      <div class="stat"><b>${escapeHtml(`${job.researchAttemptCount}/${maxAttempts}`)}</b><span>checks</span></div>
-      <div class="stat"><b>${escapeHtml(job.supplierCount)}</b><span>trusted suppliers</span></div>
-      <div class="stat"><b>${escapeHtml(job.candidateSourceCount)}</b><span>candidates</span></div>
-      <div class="stat"><b>${escapeHtml(job.rejectedSourceCount)}</b><span>rejected</span></div>
-      <div class="stat"><b>${escapeHtml(job.shippingAgentCount)}</b><span>shipping agents</span></div>
+  return `<section class="card pro-card" id="${escapeHtml(job.id)}">
+    <div class="job-head">
+      <div>
+        <h2 class="job-title">${escapeHtml(job.orderName || "Unknown order")} <span class="status ${escapeHtml(statusClass(job.status))}">${escapeHtml(statusLabel(job.status))}</span></h2>
+        ${customerLine}
+        <div class="job-meta">
+          Created ${escapeHtml(formatEventTime(job.createdAt))}${job.updatedAt ? ` · Updated ${escapeHtml(formatEventTime(job.updatedAt))}` : ""}
+          ${job.currentResearchAttempt ? ` · Current check ${escapeHtml(job.currentResearchAttempt)} of ${escapeHtml(maxAttempts)}` : ""}
+        </div>
+        ${quickLinks ? `<div class="quick-links">${quickLinks}</div>` : ""}
+      </div>
     </div>
-    ${nextLine}
-    ${completedLine}
-    ${job.researchSummary ? `<h3>Research summary</h3><p class="muted">${escapeHtml(job.researchSummary)}</p>` : ""}
-    ${selectedHtml}
-    ${suppliers ? `<h3>Top supplier/source leads</h3>${suppliers}` : ""}
-    <h3>Latest activity</h3>
-    <ul class="timeline">${timeline || "<li>No activity yet.</li>"}</ul>
+    <div class="job-body">
+      ${missingBriefLine}
+      ${runningLine}
+      <div class="stats">
+        <div class="stat"><b>${escapeHtml(`${job.researchAttemptCount}/${maxAttempts}`)}</b><span>checks</span></div>
+        <div class="stat"><b>${escapeHtml(job.supplierCount)}</b><span>approved</span></div>
+        <div class="stat"><b>${escapeHtml(job.candidateSourceCount)}</b><span>candidates</span></div>
+        <div class="stat"><b>${escapeHtml(job.rejectedSourceCount)}</b><span>rejected</span></div>
+        <div class="stat"><b>${escapeHtml(job.shippingAgentCount)}</b><span>shipping agents</span></div>
+      </div>
+      ${nextLine}
+      ${completedLine}
+      ${job.researchSummary ? `<div class="summary-box"><h3>Research summary</h3><p class="muted">${escapeHtml(job.researchSummary)}</p></div>` : ""}
+      ${missingDetails ? `<div class="warning-box"><h3>Missing details / questions</h3><ul class="mini-list">${missingDetails}</ul></div>` : ""}
+      ${selectedHtml}
+      <div class="section-stack">${sourceSections}</div>
+      <div class="timeline-wrap">
+        <h3>Latest activity</h3>
+        <ul class="timeline">${timeline || "<li>No activity yet.</li>"}</ul>
+      </div>
+    </div>
   </section>`;
+}
+
+function sourceSection({ title, subtitle, items, group, cardType, formAction, formAuthFields, job, open }) {
+  const cards = (items || []).map((source, index) => sourceCard(source, index, {
+    group,
+    cardType,
+    formAction,
+    formAuthFields,
+    job
+  })).join("");
+  return `<details class="source-section" ${open ? "open" : ""}>
+    <summary>
+      <span>${escapeHtml(title)}<span class="section-subtitle">${escapeHtml(subtitle)}</span></span>
+      <span class="count-badge">${escapeHtml((items || []).length)}</span>
+    </summary>
+    ${cards ? `<div class="source-grid">${cards}</div>` : `<div class="empty-section">No ${escapeHtml(title.toLowerCase())} captured yet.</div>`}
+  </details>`;
+}
+
+function sourceCard(source, index, { group, cardType, formAction, formAuthFields, job }) {
+  const alreadySelected = job.selectedSupplier?.sourceGroup === group && Number(job.selectedSupplier?.index) === index;
+  const actionLabel = alreadySelected
+    ? "Selected"
+    : group === "rejectedSources"
+      ? "Override and choose"
+      : group === "candidateSources"
+        ? "Choose candidate"
+        : "Choose supplier";
+  const actionClass = group === "rejectedSources" ? "button warning" : group === "candidateSources" ? "button secondary" : "button success";
+  const reason = source.reason || source.product_match || "";
+  const redFlags = (source.red_flags || []).slice(0, 3).map((flag) => `<li>${escapeHtml(flag)}</li>`).join("");
+  const evidence = (source.evidence_urls || []).slice(0, 3).map((url, urlIndex) => `<a class="pill" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">Evidence ${escapeHtml(urlIndex + 1)}</a>`).join("");
+
+  return `<article class="source-card ${escapeHtml(cardType)}">
+    ${sourceImageHtml(source)}
+    <div>
+      <h4 class="source-title">${escapeHtml(index + 1)}. ${escapeHtml(source.name || "Unnamed source")}</h4>
+      <div class="source-type">${escapeHtml(source.source_type || source.location || "source type not captured")}</div>
+      <div class="source-metrics">
+        <div class="metric"><span>Approx total in rand</span><b>${escapeHtml(displayRandTotal(source))}</b></div>
+        <div class="metric"><span>Listed price</span><b>${escapeHtml(source.price || "Not captured")}</b></div>
+        <div class="metric"><span>Trust score</span><b>${escapeHtml(displayTrustScore(source))}</b></div>
+        <div class="metric"><span>Risk</span><b class="${escapeHtml(riskClass(source.risk_level))}">${escapeHtml(source.risk_level || "unknown")}</b></div>
+      </div>
+      ${source.availability ? `<p class="source-note"><strong>Availability:</strong> ${escapeHtml(source.availability)}</p>` : ""}
+      ${source.delivery_or_pickup ? `<p class="source-note"><strong>Delivery/pickup:</strong> ${escapeHtml(source.delivery_or_pickup)}</p>` : ""}
+      ${reason ? `<p class="source-note">${escapeHtml(reason)}</p>` : ""}
+      ${redFlags ? `<ul class="mini-list">${redFlags}</ul>` : ""}
+      <div class="source-actions">
+        ${source.url ? `<a class="button secondary" href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">Open source</a>` : ""}
+        ${evidence}
+        <form method="POST" action="${escapeHtml(formAction)}">
+          ${formAuthFields}
+          <input type="hidden" name="job_id" value="${escapeHtml(job.id)}" />
+          <input type="hidden" name="source_group" value="${escapeHtml(group)}" />
+          <input type="hidden" name="supplier_index" value="${escapeHtml(index)}" />
+          <button class="${escapeHtml(actionClass)}" type="submit">${escapeHtml(actionLabel)}</button>
+        </form>
+      </div>
+    </div>
+  </article>`;
+}
+
+function shippingAgentSection(agents) {
+  const cards = (agents || []).map((agent, index) => `<article class="source-card wide">
+    <div class="image-fallback">Shipping<br>agent</div>
+    <div>
+      <h4 class="source-title">${escapeHtml(index + 1)}. ${escapeHtml(agent.name || "Unnamed shipping agent")}</h4>
+      <div class="source-metrics">
+        <div class="metric"><span>Estimated cost</span><b>${escapeHtml(agent.estimated_cost || "Quote needed")}</b></div>
+        <div class="metric"><span>Routes</span><b>${escapeHtml(agent.countries_supported || "Not captured")}</b></div>
+        <div class="metric"><span>Trust score</span><b>${escapeHtml(displayTrustScore(agent))}</b></div>
+        <div class="metric"><span>Risk</span><b class="${escapeHtml(riskClass(agent.risk_level))}">${escapeHtml(agent.risk_level || "unknown")}</b></div>
+      </div>
+      ${agent.notes ? `<p class="source-note">${escapeHtml(agent.notes)}</p>` : ""}
+      <div class="source-actions">
+        ${agent.url ? `<a class="button secondary" href="${escapeHtml(agent.url)}" target="_blank" rel="noreferrer">Open shipping agent</a>` : ""}
+        ${(agent.evidence_urls || []).slice(0, 3).map((url, urlIndex) => `<a class="pill" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">Evidence ${escapeHtml(urlIndex + 1)}</a>`).join("")}
+      </div>
+    </div>
+  </article>`).join("");
+  return `<details class="source-section">
+    <summary>
+      <span>Shipping agents<span class="section-subtitle">Forwarders and shipping options the AI found for international orders.</span></span>
+      <span class="count-badge">${escapeHtml((agents || []).length)}</span>
+    </summary>
+    ${cards ? `<div class="source-grid">${cards}</div>` : `<div class="empty-section">No shipping agents captured yet.</div>`}
+  </details>`;
+}
+
+function selectedSourceBox(source, selectedSupplier) {
+  return `<div class="selected-box">
+    <h3>Selected source</h3>
+    <p><strong>${escapeHtml(source.name || "Unnamed source")}</strong></p>
+    <p class="muted">Chosen from ${escapeHtml(sourceGroupLabel(selectedSupplier?.sourceGroup))} · ${escapeHtml(displayRandTotal(source))} · Trust ${escapeHtml(displayTrustScore(source))} · Risk ${escapeHtml(source.risk_level || "unknown")}</p>
+    ${source.url ? `<a class="button success" href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">Open selected source</a>` : ""}
+  </div>`;
+}
+
+function sourceImageHtml(source) {
+  const imageUrl = source.image_url || source.product_image_url || source.item_image_url || source.image || "";
+  if (isSafeImageUrl(imageUrl)) {
+    return `<img class="source-image" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(source.name || "Product image")}" loading="lazy" referrerpolicy="no-referrer" />`;
+  }
+  return `<div class="image-fallback">No item<br>image yet</div>`;
+}
+
+function displayRandTotal(source) {
+  const direct = source.estimated_total_zar || source.approx_total_zar || source.total_zar || "";
+  if (direct) return direct;
+  const total = source.estimated_total_to_customer || "";
+  if (/\bZAR\b|(^|\s)R\s?\d/i.test(total)) return total;
+  const price = source.price || "";
+  if (/\bZAR\b|(^|\s)R\s?\d/i.test(price)) return price;
+  return "Needs ZAR estimate";
+}
+
+function displayTrustScore(source) {
+  if (source.trust_score === 0) return "0/100";
+  return source.trust_score ? `${source.trust_score}/100` : "n/a";
+}
+
+function riskClass(riskLevel) {
+  const risk = String(riskLevel || "unknown").toLowerCase();
+  if (risk.includes("low")) return "risk-low";
+  if (risk.includes("high") || risk.includes("unsafe")) return "risk-high";
+  if (risk.includes("medium")) return "risk-medium";
+  return "risk-unknown";
+}
+
+function sourceGroupLabel(group) {
+  const labels = {
+    suppliers: "approved suppliers",
+    candidateSources: "candidate sources",
+    rejectedSources: "rejected suppliers"
+  };
+  return labels[group] || "sources";
+}
+
+function isSafeImageUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
 }
 
 function monitorLiteJobCard(job) {
@@ -1354,7 +1611,7 @@ function addDays(date, days) {
 }
 
 function escapeHtml(value) {
-  return String(value || "")
+  return String(value ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
