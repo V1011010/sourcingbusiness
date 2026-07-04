@@ -36,7 +36,14 @@
               "website_payment_delivery": { "type": "string" },
               "business_identity": { "type": "string" }
             },
-            "additionalProperties": true
+            "required": [
+              "customer_reviews",
+              "hellopeter",
+              "social_media",
+              "website_payment_delivery",
+              "business_identity"
+            ],
+            "additionalProperties": false
           },
           "red_flags": {
             "type": "array",
