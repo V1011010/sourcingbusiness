@@ -31,6 +31,8 @@ const server = http.createServer(async (req, res) => {
           superDeepFirstSearch: true,
           retryOnlyIfNoMatch: true,
           extraConfirmationSearchAfterMatch: true,
+          technicalRetryDelayRespected: true,
+          researchSchedulerPolicyVersion: "super_deep_conditional_v2",
           activeResearchRetryMinutes: config.researchRetryDelayMinutes || 5,
           allOrdersSupplierReview: true,
           missingBriefFixLinks: true,
