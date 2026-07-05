@@ -4,14 +4,14 @@ const FETCH_TIMEOUT_MS = 6_000;
 const IMAGE_FETCH_CONCURRENCY = 5;
 const MAX_IMAGES_PER_SOURCE = 5;
 
-export async function enrichResearchImages(research) {
+export async function enrichResearchImages(research, context = {}) {
   if (!research || typeof research !== "object") return research;
 
   const fetchBudget = { remaining: MAX_IMAGE_FETCHES_PER_REPORT };
   const groups = ["suppliers", "candidateSources", "rejectedSources"];
 
   for (const group of groups) {
-    research[group] = await enrichSourceListImages(research[group] || [], fetchBudget);
+    research[group] = await enrichSourceListImages(research[group] || [], fetchBudget, context);
   }
 
   return research;
@@ -22,49 +22,54 @@ export function imageEnrichmentHealthFeatures() {
     supplierImageUrlAutoEnrichment: true,
     supplierImageGalleryAutoEnrichment: true,
     supplierImageSources: ["ai_image_url", "ai_image_urls", "og:image", "twitter:image", "json_ld_image", "direct_image_url", "html_img_src"],
+    supplierImageProductRelevanceFilter: true,
     supplierImageFetchLimitPerReport: MAX_IMAGE_FETCHES_PER_REPORT,
     supplierImageGalleryLimitPerSource: MAX_IMAGES_PER_SOURCE
   };
 }
 
-async function enrichSourceListImages(items, fetchBudget) {
+async function enrichSourceListImages(items, fetchBudget, context) {
   const enriched = [];
   const list = items || [];
 
   for (let index = 0; index < list.length; index += IMAGE_FETCH_CONCURRENCY) {
     const batch = list.slice(index, index + IMAGE_FETCH_CONCURRENCY);
-    enriched.push(...await Promise.all(batch.map((item) => enrichSourceImage(item, fetchBudget))));
+    enriched.push(...await Promise.all(batch.map((item) => enrichSourceImage(item, fetchBudget, context))));
   }
   return enriched;
 }
 
-async function enrichSourceImage(source, fetchBudget) {
+async function enrichSourceImage(source, fetchBudget, context) {
   if (!source || typeof source !== "object") return source;
-  const existingImages = sourceImageUrls(source);
-  if (existingImages.length >= MAX_IMAGES_PER_SOURCE) {
-    return normalizeSourceImages(source, existingImages, source.image_source || "provided");
+  const existingImages = sourceDirectImageUrls(source, context);
+  const existingReferenceImages = sourceReferenceImageUrls(source, context);
+  if (existingImages.length + existingReferenceImages.length >= MAX_IMAGES_PER_SOURCE) {
+    return normalizeSourceImages(source, existingImages, source.image_source || "provided", existingReferenceImages);
   }
   if (!isSafeHttpUrl(source.url) || fetchBudget.remaining <= 0) {
-    return normalizeSourceImages(source, existingImages, source.image_source || "provided");
+    return normalizeSourceImages(source, existingImages, source.image_source || "provided", existingReferenceImages);
   }
 
   fetchBudget.remaining -= 1;
-  const discovered = await discoverImagesFromPage(source.url);
+  const discovered = filterRelevantImageUrls(source, await discoverImagesFromPage(source.url), context, {
+    fromSourcePage: true
+  });
   const images = uniqueImageUrls([...existingImages, ...discovered]).slice(0, MAX_IMAGES_PER_SOURCE);
-  if (!images.length) return source;
 
-  return normalizeSourceImages(source, images, discovered.length ? "page_metadata" : source.image_source || "provided");
+  return normalizeSourceImages(source, images, discovered.length ? "page_metadata" : source.image_source || "provided", existingReferenceImages);
 }
 
-function normalizeSourceImages(source, images, imageSource) {
+function normalizeSourceImages(source, images, imageSource, referenceImages = []) {
   const safeImages = uniqueImageUrls(images).slice(0, MAX_IMAGES_PER_SOURCE);
-  if (!safeImages.length) return source;
+  const safeReferenceImages = uniqueImageUrls(referenceImages).slice(0, MAX_IMAGES_PER_SOURCE);
+  const hasAnySafeImage = safeImages.length || safeReferenceImages.length;
 
   return {
     ...source,
-    image_url: source.image_url || safeImages[0],
+    image_url: safeImages[0] || safeReferenceImages[0] || "",
     image_urls: safeImages,
-    image_source: imageSource
+    reference_image_urls: safeReferenceImages,
+    image_source: hasAnySafeImage ? imageSource : "none_confident"
   };
 }
 
@@ -217,19 +222,79 @@ function absoluteUrl(value, baseUrl) {
   }
 }
 
-function sourceImageUrls(source) {
+function sourceDirectImageUrls(source, context) {
   const values = [
     source?.image_url,
     source?.product_image_url,
     source?.item_image_url,
     source?.image,
     source?.thumbnail_url,
-    source?.reference_image_url,
     ...listValues(source?.image_urls),
-    ...listValues(source?.product_image_urls),
-    ...listValues(source?.reference_image_urls)
+    ...listValues(source?.product_image_urls)
   ];
-  return uniqueImageUrls(values);
+  return filterRelevantImageUrls(source, values, context);
+}
+
+function sourceReferenceImageUrls(source, context) {
+  return filterRelevantImageUrls(source, [
+    source?.reference_image_url,
+    ...listValues(source?.reference_image_urls),
+    ...listValues(source?.reference_images)
+  ], context, { requireKeyword: true });
+}
+
+function filterRelevantImageUrls(source, values, context = {}, options = {}) {
+  const keywords = relevanceKeywords(source, context);
+  const sourceHost = hostName(source?.url);
+
+  return uniqueImageUrls(values).filter((imageUrl) => {
+    const imageText = safeDecodeURIComponent(imageUrl).toLowerCase();
+    if (isLikelyNonProductImage(imageText) || isProbablyTinyImage(imageText)) return false;
+
+    const keywordHits = keywords.filter((keyword) => imageTextIncludesKeyword(imageText, keyword)).length;
+    if (keywordHits > 0) return true;
+    if (options.requireKeyword) return false;
+    if (options.fromSourcePage) return true;
+
+    const imageHost = hostName(imageUrl);
+    if (sharesSiteRoot(sourceHost, imageHost)) return true;
+    return keywords.length === 0;
+  });
+}
+
+function relevanceKeywords(source, context = {}) {
+  const text = [
+    context.productRequest,
+    source?.name,
+    source?.product_match,
+    source?.source_type,
+    source?.url
+  ].join(" ").toLowerCase();
+
+  const stopWords = new Set([
+    "https", "http", "www", "com", "co", "za", "the", "and", "for", "with", "from", "that", "this", "near", "item", "product",
+    "supplier", "source", "store", "shop", "online", "physical", "service", "provider", "budget", "price", "delivery", "shipping",
+    "category", "condition", "preference", "maximum", "extra", "notes", "links", "photo", "description", "south", "africa", "african"
+  ]);
+
+  const tokens = text
+    .split(/[^a-z0-9]+/i)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && token.length <= 32 && !stopWords.has(token));
+
+  return [...new Set(tokens)].slice(0, 40);
+}
+
+function imageTextIncludesKeyword(imageText, keyword) {
+  if (!keyword) return false;
+  if (keyword.length <= 3) {
+    return new RegExp(`(^|[^a-z0-9])${escapeRegex(keyword)}([^a-z0-9]|$)`, "i").test(imageText);
+  }
+  return imageText.includes(keyword);
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function uniqueImageUrls(values) {
@@ -283,6 +348,52 @@ function looksLikeUsefulImageCandidate(value) {
 function isLikelyIcon(value) {
   const text = String(value || "").toLowerCase();
   return /favicon|apple-touch-icon|icon-192|icon-512|logo(?!.*product)/.test(text);
+}
+
+function isLikelyNonProductImage(value) {
+  const text = String(value || "").toLowerCase();
+  return /favicon|apple-touch-icon|sprite|icon[-_0-9]|logo(?!.*product)|placeholder|no[-_ ]?image|default[-_ ]?image|loading|spinner|avatar|profile|social|facebook|instagram|x-twitter|twitter|linkedin|youtube|payment|visa|mastercard|paypal|eft|trust[-_ ]?badge|secure[-_ ]?checkout|newsletter|header|footer|banner|hero|background|storefront|map|pin|marker/.test(text);
+}
+
+function isProbablyTinyImage(value) {
+  const text = String(value || "").toLowerCase();
+  const dimensions = [...text.matchAll(/(?:^|[^\d])(\d{1,4})[x_=-](\d{1,4})(?:[^\d]|$)/g)];
+  return dimensions.some((match) => Number(match[1]) < 180 || Number(match[2]) < 180);
+}
+
+function hostName(value) {
+  try {
+    return new URL(String(value || "")).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function sharesSiteRoot(leftHost, rightHost) {
+  if (!leftHost || !rightHost) return false;
+  if (leftHost === rightHost) return true;
+  const leftRoot = siteRoot(leftHost);
+  const rightRoot = siteRoot(rightHost);
+  return Boolean(leftRoot && rightRoot && leftRoot === rightRoot);
+}
+
+function siteRoot(host) {
+  const parts = String(host || "").split(".").filter(Boolean);
+  if (parts.length <= 2) return parts.join(".");
+  const last = parts.at(-1);
+  const secondLast = parts.at(-2);
+  if (last?.length === 2 && ["co", "com", "net", "org"].includes(secondLast)) {
+    return parts.slice(-3).join(".");
+  }
+  return parts.slice(-2).join(".");
+}
+
+function safeDecodeURIComponent(value) {
+  try {
+    return decodeURIComponent(String(value || ""));
+  } catch {
+    return String(value || "");
+  }
 }
 
 function decodeHtmlEntities(value) {

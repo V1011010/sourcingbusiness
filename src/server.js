@@ -1159,17 +1159,7 @@ function customerOptionImageUrls(job, index) {
   const source = job?.research?.suppliers?.[index] || null;
   const direct = sourceImageUrls(source);
   if (direct.length) return direct.slice(0, 5);
-
-  const fallbackImages = uniqueImageUrls([
-    ...(job?.research?.suppliers || []),
-    ...(job?.research?.candidateSources || [])
-  ]
-    .flatMap(sourceImageUrls)
-    .filter(isSafeImageUrl));
-
-  if (!fallbackImages.length) return [];
-  const start = index % fallbackImages.length;
-  return [...fallbackImages.slice(start), ...fallbackImages.slice(0, start)].slice(0, 5);
+  return [];
 }
 
 function hasSourceImage(source) {
@@ -1303,12 +1293,24 @@ function uniqueImageUrls(values) {
   for (const value of values || []) {
     const imageUrl = String(value || "").trim();
     if (!isSafeImageUrl(imageUrl)) continue;
+    if (isLikelyNonProductImage(imageUrl) || isProbablyTinyImage(imageUrl)) continue;
     const key = imageUrl.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
     output.push(imageUrl);
   }
   return output;
+}
+
+function isLikelyNonProductImage(value) {
+  const text = String(value || "").toLowerCase();
+  return /favicon|apple-touch-icon|sprite|icon[-_0-9]|logo(?!.*product)|placeholder|no[-_ ]?image|default[-_ ]?image|loading|spinner|avatar|profile|social|facebook|instagram|x-twitter|twitter|linkedin|youtube|payment|visa|mastercard|paypal|eft|trust[-_ ]?badge|secure[-_ ]?checkout|newsletter|header|footer|banner|hero|background|storefront|map|pin|marker/.test(text);
+}
+
+function isProbablyTinyImage(value) {
+  const text = String(value || "").toLowerCase();
+  const dimensions = [...text.matchAll(/(?:^|[^\d])(\d{1,4})[x_=-](\d{1,4})(?:[^\d]|$)/g)];
+  return dimensions.some((match) => Number(match[1]) < 180 || Number(match[2]) < 180);
 }
 
 function listFieldValues(value) {
@@ -2079,9 +2081,9 @@ function briefLinkForStatus(job) {
 }
 
 function researchProgressHtml(job) {
-  const attempt = job.researchAttemptCount || 0;
   const policy = researchPolicySummary();
   const maxAttempts = Math.min(job.maxResearchAttempts || policy.maxTotalAttempts, policy.maxTotalAttempts);
+  const attempt = Math.min(job.researchAttemptCount || 0, maxAttempts);
   const current = job.currentResearchAttempt ? `<br>Current check: ${escapeHtml(job.currentResearchAttempt)} of ${escapeHtml(maxAttempts)}` : "";
   const next = job.nextResearchAt ? `<br>Next deep check: ${escapeHtml(formatEventTime(job.nextResearchAt))}` : "";
   const suppliers = job.research?.suppliers?.length || 0;
@@ -2090,7 +2092,7 @@ function researchProgressHtml(job) {
 
   return `<section>
     <h2>Research progress</h2>
-    <p class="muted">Deep checks completed: ${escapeHtml(attempt)} of ${escapeHtml(maxAttempts)}${current}${next}<br>Policy: one super-deep search first, up to ${escapeHtml(policy.noMatchRetries)} retry search(es) only if no trusted source is found, and ${escapeHtml(policy.confirmationChecksAfterFound)} extra expansion check after the first trusted match.<br>Trusted suppliers waiting for review: ${escapeHtml(suppliers)}<br>Candidate sources checked: ${escapeHtml(candidates)}<br>Unsafe or untrusted sources removed: ${escapeHtml(rejected)}</p>
+    <p class="muted">Deep checks completed: ${escapeHtml(attempt)} of ${escapeHtml(maxAttempts)}${current}${next}<br>Policy: Arcovia runs exactly ${escapeHtml(policy.maxTotalAttempts)} deep research passes total before sending final customer options or the no-supplier/refund email.<br>Trusted suppliers waiting for review: ${escapeHtml(suppliers)}<br>Candidate sources checked: ${escapeHtml(candidates)}<br>Unsafe or untrusted sources removed: ${escapeHtml(rejected)}</p>
   </section>`;
 }
 

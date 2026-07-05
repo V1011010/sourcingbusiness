@@ -15,9 +15,9 @@ Shopify Flow is the easiest for this store because Arcovia is on Shopify Advance
 - Extracts the product request from order notes, line-item properties, or Flow payload fields.
 - If the customer did not provide product details, sends them a unique intake form link.
 - Runs AI deep web research with supplier trust checks.
-- Runs one super-deep sourcing search first.
-- If no trusted source is found, retries up to 2 more times with different search angles.
-- If a trusted source is found, runs 1 extra expansion/confirmation search to catch more choices before Arcovia picks a supplier.
+- Runs 3 deep sourcing searches total for every paid request before final outcome.
+- The first pass is the super-deep search; pass 2 and pass 3 use different search angles and expansion/confirmation checks.
+- If a trusted source is found early, the worker still completes all 3 passes before sending customer options.
 - Checks for review, complaint, and trust signals such as:
   - supplier website and product match
   - online stores, physical stores, marketplaces, distributors, importers, and wholesalers
@@ -32,9 +32,9 @@ Shopify Flow is the easiest for this store because Arcovia is on Shopify Advance
 - Keeps safe candidates above the customer's budget in the internal report in case there is no cheaper trustworthy option.
 - Sends regular customer updates while the search is in progress.
 - Sends the internal supplier report to Arcovia for human approval.
-- Captures multiple source/product images per option where available. If a source page has no image, the worker can add clearly matching reference images, but those are treated as reference images rather than supplier-owned proof.
+- Captures multiple source/product images per option where available. Images are filtered so customer options do not borrow pictures from other suppliers and do not use obvious logos, banners, placeholders, profile pictures, or generic unrelated images.
 - Never buys from a supplier automatically.
-- If the initial super-deep search plus the no-match retries finish with no trusted source, marks the job `refund_due` and emails Arcovia/customer. The actual payment refund is still a manual Shopify/PayFast action until refund automation is separately tested.
+- If all 3 deep searches finish with no trusted source, marks the job `refund_due` and emails Arcovia/customer that no trusted supplier/source was found. The actual payment refund is still a manual Shopify/PayFast action until refund automation is separately tested.
 - Optional local Codex worker mode lets an always-on Windows PC run supplier research through the signed-in Codex CLI instead of the hosted OpenAI API.
 
 ## Local setup
@@ -52,9 +52,9 @@ Fill in `.env`:
 - `ARCOVIA_FLOW_SECRET`
 - `RESEND_API_KEY` if you want real emails
 - `ADMIN_EMAIL`
-- `DEEP_RESEARCH_MAX_ATTEMPTS` defaults to `4`: first super-deep search, up to 2 no-match retries, and 1 expansion check after the first trusted match
+- `DEEP_RESEARCH_MAX_ATTEMPTS` defaults to `3`; the current worker policy is fixed at 3 completed deep research passes total
 - `DEEP_RESEARCH_NO_MATCH_RETRIES` defaults to `2`
-- `DEEP_RESEARCH_CONFIRMATION_CHECKS_AFTER_FOUND` defaults to `1`
+- `DEEP_RESEARCH_CONFIRMATION_CHECKS_AFTER_FOUND` defaults to `2`; the current worker policy still completes 3 total passes rather than stopping early
 - `RESEARCH_RETRY_DELAY_MINUTES` defaults to `5`
 - `OPENAI_WEB_SEARCH_CONTEXT_SIZE` defaults to `high` for the super-deep sourcing pass
 - `RESEARCH_TECHNICAL_RETRY_DELAY_MINUTES` defaults to `15`; technical API/rate-limit errors retry quickly and do not count as one of the sourcing checks
@@ -193,7 +193,7 @@ Invoke-RestMethod `
 Important status fields:
 
 - `researchRunning: true` means the AI is actively doing a sourcing check right now.
-- `researchAttemptCount: 1` through `10` shows how many deep checks have completed or started.
+- `researchAttemptCount: 1` through `3` shows how many deep checks have completed or started.
 - `nextResearchAt` shows when the next automatic check will run.
 - `deepResearchSearchContextSize`, `deepResearchReasoningEffort`, and `deepResearchMaxOutputTokens` are exposed on `/health` so you can confirm Render is using the safe OpenAI settings.
 - `supplierCount` is the number of trusted sources that survived filtering.

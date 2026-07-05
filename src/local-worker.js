@@ -114,8 +114,9 @@ export async function handleLocalWorkerReport(req, res) {
     return json(res, 200, { ok: true, status: job.status, retry_at: job.nextResearchAt });
   }
 
-  const attemptResearch = await enrichResearchImages(normalizeLocalWorkerReport(body.report, attemptNumber));
-  const hadTrustedBefore = Boolean(job.research?.suppliers?.length);
+  const attemptResearch = await enrichResearchImages(normalizeLocalWorkerReport(body.report, attemptNumber), {
+    productRequest: job.productRequest
+  });
   const mergedResearch = mergeResearch(job.research, attemptResearch);
   const trustedSupplierCount = mergedResearch.suppliers.length;
   const candidateCount = mergedResearch.candidateSources.length;
@@ -156,19 +157,15 @@ export async function handleLocalWorkerReport(req, res) {
     job.researchFirstFoundAttempt ||= attemptNumber;
   }
 
-  if (trustedSupplierCount > 0 && shouldRunConfirmationSearch(job, attemptNumber, policy)) {
-    job.status = "human_review";
+  if (shouldRunAnotherLocalResearchPass(attemptNumber, policy)) {
+    job.status = "researching";
     job.nextResearchAt = addMinutes(new Date(), researchRetryDelayMinutes()).toISOString();
-    addTimeline(job, "local_worker_more_scheduled", `Supplier options are ready. Local Codex will run one extra expansion check at ${formatJohannesburg(job.nextResearchAt)} unless Arcovia selects a supplier first.`, {
+    addTimeline(job, "local_worker_more_scheduled", `Local Codex will run deep research pass ${attemptNumber + 1} of ${policy.maxTotalAttempts} at ${formatJohannesburg(job.nextResearchAt)}. Arcovia will complete all ${policy.maxTotalAttempts} passes before sending final customer options or the no-supplier email.`, {
       nextResearchAt: job.nextResearchAt,
       nextAttempt: attemptNumber + 1,
       maxAttempts: policy.maxTotalAttempts
     });
     upsertJob(job);
-
-    if (!hadTrustedBefore && !skipEmails) {
-      await sendEmail({ to: config.adminEmail, ...adminReport(job) });
-    }
 
     return json(res, 200, { ok: true, status: job.status, suppliers: trustedSupplierCount, next_research_at: job.nextResearchAt });
   }
@@ -178,7 +175,7 @@ export async function handleLocalWorkerReport(req, res) {
     job.researchCompletedAt = new Date().toISOString();
     job.nextResearchAt = null;
     job.customerOptionsToken ||= randomUUID();
-    addTimeline(job, "research_completed", "Local Codex sourcing is complete. Supplier shortlist is ready for Arcovia human review.", {
+    addTimeline(job, "research_completed", `All ${policy.maxTotalAttempts} local Codex deep sourcing passes are complete. Supplier shortlist is ready for Arcovia human review.`, {
       suppliers: trustedSupplierCount,
       attempts: attemptNumber
     });
@@ -204,7 +201,7 @@ export async function handleLocalWorkerReport(req, res) {
   if (attemptNumber >= policy.noMatchAttemptLimit) {
     job.status = "refund_due";
     job.refundStatus = "manual_refund_required";
-    job.refundReason = `No trusted source found by local Codex after the initial super-deep search and ${policy.noMatchRetries} retry search(es).`;
+    job.refundReason = `No trusted supplier found by local Codex after all ${policy.maxTotalAttempts} deep sourcing pass(es).`;
     job.researchCompletedAt = new Date().toISOString();
     job.nextResearchAt = null;
     job.nextUpdateAt = null;
@@ -336,6 +333,7 @@ ${summarizePreviousAttempts(job)}
 
 Required behavior:
 - Do one super-deep search on the first pass. Find as many real choices as possible in one run.
+- This order must receive exactly ${policy.maxTotalAttempts} completed deep sourcing passes before Arcovia sends final customer options or a no-supplier/refund email, unless Arcovia has already manually selected a supplier.
 - Adapt to the request category. The customer may need a product, local service provider, manufacturer/factory, fabric/textile supplier, wholesaler, distributor, physical store, or import route.
 - If this is a retry, use different wording and search angles from previous attempts.
 - If suppliers were already found, search once more for missed alternatives and stronger trust evidence.
@@ -346,7 +344,8 @@ Required behavior:
 - Check trust signals for every candidate: customer reviews, HelloPeter where relevant, social media, public complaints, delivery/payment claims, business identity, contact details, refund policy, portfolios/project proof, and counterfeit/scam red flags.
 - Include options above the customer's budget if they are real and relevant.
 - For every source, include image_url for the best direct product/provider image and image_urls with up to 5 useful angles/images when the product page, provider page, marketplace result, official brand page, or safe reference result exposes them.
-- If the supplier/source page has no images, use reference_image_urls only for clearly matching reference images found from search or official product pages. Do not use random unrelated images.
+- Only include images that clearly show the requested item, service proof/portfolio, manufacturer capability, or fabric/material match. Do not include random Google images, logos, banners, header images, payment icons, social profile pictures, unrelated stock photos, category thumbnails, or generic brand images.
+- If the supplier/source page has no images, use reference_image_urls only for clearly matching reference images from an official product/brand page or a search result whose title/URL matches the requested product. If image relevance is uncertain, leave image_url blank and image_urls/reference_image_urls empty.
 - For every source, include estimated_total_zar as the approximate total customer cost in South African Rand, including item price, known or estimated shipping, duties, VAT, and handling where possible. If it cannot be estimated, explain briefly such as "Needs checkout quote in ZAR".
 - For rejected_sources, also include image_url and image_urls if real item/source images were visible; otherwise return empty strings/arrays.
 - Remove unsafe or untrusted sources from the final sources list and put them under rejected_sources with short factual reasons.
@@ -364,15 +363,7 @@ Return JSON only.`;
 function hasCompletedPolicy(job) {
   const policy = researchPolicySummary();
   const completedAttempts = Number(job.researchAttemptCount || 0);
-  const trustedSupplierCount = Number(job.research?.suppliers?.length || 0);
-  if (trustedSupplierCount > 0) {
-    const requiredAttempt = Math.min(
-      firstTrustedAttempt(job, completedAttempts || 1) + policy.confirmationChecksAfterFound,
-      policy.maxTotalAttempts
-    );
-    return completedAttempts >= requiredAttempt;
-  }
-  return completedAttempts >= policy.noMatchAttemptLimit;
+  return completedAttempts >= policy.maxTotalAttempts;
 }
 
 function settleCompletedPolicyJob(job, policy = researchPolicySummary()) {
@@ -390,7 +381,7 @@ function settleCompletedPolicyJob(job, policy = researchPolicySummary()) {
     job.researchCompletedAt ||= now;
     job.customerOptionsToken ||= randomUUID();
     if (changed) {
-      addTimeline(job, "research_completed", "Saved job already satisfies the local Codex research policy. No further worker checks are scheduled unless Arcovia requeues it.", {
+      addTimeline(job, "research_completed", `Saved job already has ${policy.maxTotalAttempts} completed local Codex research pass(es). No further worker checks are scheduled unless Arcovia requeues it.`, {
         suppliers: trustedSupplierCount,
         attempts: job.researchAttemptCount || 0
       });
@@ -402,7 +393,7 @@ function settleCompletedPolicyJob(job, policy = researchPolicySummary()) {
   const changed = job.status !== "refund_due" || !job.researchCompletedAt;
   job.status = "refund_due";
   job.refundStatus = "manual_refund_required";
-  job.refundReason ||= `No trusted source found after the initial super-deep search and ${policy.noMatchRetries} retry search(es).`;
+  job.refundReason ||= `No trusted supplier found after all ${policy.maxTotalAttempts} deep sourcing pass(es).`;
   job.nextUpdateAt = null;
   job.researchCompletedAt ||= now;
   if (changed) {
@@ -413,10 +404,8 @@ function settleCompletedPolicyJob(job, policy = researchPolicySummary()) {
   upsertJob(job);
 }
 
-function shouldRunConfirmationSearch(job, attemptNumber, policy) {
-  const firstFoundAttempt = firstTrustedAttempt(job, attemptNumber);
-  const requiredAttempt = Math.min(firstFoundAttempt + policy.confirmationChecksAfterFound, policy.maxTotalAttempts);
-  return attemptNumber < requiredAttempt;
+function shouldRunAnotherLocalResearchPass(attemptNumber, policy) {
+  return attemptNumber < policy.maxTotalAttempts;
 }
 
 function firstTrustedAttempt(job, fallbackAttempt) {

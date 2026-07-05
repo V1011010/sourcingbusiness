@@ -40,11 +40,11 @@ services:
       - key: MAX_SOURCING_DAYS
         value: "14"
       - key: DEEP_RESEARCH_MAX_ATTEMPTS
-        value: "4"
+        value: "3"
       - key: DEEP_RESEARCH_NO_MATCH_RETRIES
         value: "2"
       - key: DEEP_RESEARCH_CONFIRMATION_CHECKS_AFTER_FOUND
-        value: "1"
+        value: "2"
       - key: RESEARCH_RETRY_DELAY_MINUTES
         value: "5"
       - key: RESEARCH_TECHNICAL_RETRY_DELAY_MINUTES

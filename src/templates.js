@@ -83,7 +83,7 @@ export function stageUpdate(job) {
     supplier_selected: "Arcovia has selected a supplier/source for internal follow-up. We will confirm the final quote and next steps before any purchase is made.",
     quote_ready: "Your sourcing result is ready. Arcovia will contact you with the quote and next steps.",
     no_match: "We have not found a trustworthy match yet. If we cannot find one within the sourcing window, the refundable-deposit rule applies.",
-    refund_due: "We could not verify a trustworthy source after the agreed sourcing checks. Your refundable deposit is now marked for refund processing."
+    refund_due: "We completed all 3 deep research checks and could not find a trusted supplier/source we are comfortable recommending. Your refundable deposit is now marked for refund processing."
   };
   const progressLine = researchProgressLine(job);
 
@@ -231,10 +231,10 @@ Process the customer's refundable R250 deposit manually in Shopify/PayFast, then
 
 export function customerRefundDue(job) {
   return {
-    subject: `Arcovia sourcing refund update for ${job.orderName}`,
+    subject: `No trusted supplier found for ${job.orderName}`,
     text: `Hi ${job.customerName || "there"},
 
-We completed the sourcing checks for your request, but we could not verify a trustworthy source that we are comfortable recommending.
+We completed all 3 deep sourcing checks for your request, but we could not find a trusted supplier/source that we are comfortable recommending.
 
 Your R250 sourcing deposit is therefore marked for refund processing under the refundable-deposit rule.
 
@@ -267,23 +267,17 @@ Fix the API/config issue, then retry the paid-order webhook or ask Codex to repr
 }
 
 function researchProgressLine(job) {
-  const attempt = job.researchAttemptCount || 0;
   const maxAttempts = displayMaxAttempts(job);
-  const noMatchRetries = Math.max(0, Math.floor(Number(config.deepResearchNoMatchRetries || 2)));
-  const confirmationChecks = Math.max(0, Math.floor(Number(config.deepResearchConfirmationChecksAfterFound || 1)));
+  const attempt = Math.min(job.researchAttemptCount || 0, maxAttempts);
   const nextResearchAt = job.nextResearchAt
     ? new Date(job.nextResearchAt).toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg" })
     : "";
-  const base = attempt ? `Research checks completed: ${attempt}/${maxAttempts}. Policy: one super-deep search first, up to ${noMatchRetries} retry search(es) only if no trusted source is found, and ${confirmationChecks} extra expansion check after the first trusted match.` : "";
+  const base = attempt ? `Research checks completed: ${attempt}/${maxAttempts}. Policy: Arcovia runs 3 deep research passes total before sending final customer options or the no-supplier/refund email.` : "";
   return [base, nextResearchAt ? `Next check: ${nextResearchAt}.` : ""].filter(Boolean).join(" ");
 }
 
 function displayMaxAttempts(job) {
-  const noMatchRetries = Math.max(0, Math.floor(Number(config.deepResearchNoMatchRetries || 2)));
-  const confirmationChecks = Math.max(0, Math.floor(Number(config.deepResearchConfirmationChecksAfterFound || 1)));
-  const policyMax = 1 + noMatchRetries + confirmationChecks;
-  const configuredMax = Math.max(1, Math.floor(Number(config.deepResearchMaxAttempts || policyMax)));
-  return Math.max(1 + noMatchRetries, Math.min(job.maxResearchAttempts || configuredMax, policyMax));
+  return Math.min(3, Math.max(1, Number(job.maxResearchAttempts || config.deepResearchMaxAttempts || 3)));
 }
 
 function displayRandTotal(source) {

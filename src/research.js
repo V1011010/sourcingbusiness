@@ -13,6 +13,7 @@ import {
 import { addTimeline, getJob, readJobs, upsertJob } from "./storage.js";
 
 const runningJobs = new Set();
+const REQUIRED_DEEP_RESEARCH_ATTEMPTS = 3;
 
 export function queueResearch(jobId) {
   if (runningJobs.has(jobId)) return;
@@ -83,7 +84,6 @@ export async function runResearch(jobId) {
   const attemptNumber = Number(job.researchAttemptCount || 0) + 1;
   if (attemptNumber > maxAttempts) return;
   const now = new Date();
-  const hadTrustedBefore = Boolean(job.research?.suppliers?.length);
 
   job.status = "researching";
   job.researchStartedAt ||= now.toISOString();
@@ -105,7 +105,9 @@ export async function runResearch(jobId) {
     await sendEmail({ to: job.customerEmail, ...stageUpdate(job) });
   }
 
-  const attemptResearch = await enrichResearchImages(await performSupplierResearch(job, attemptNumber, maxAttempts));
+  const attemptResearch = await enrichResearchImages(await performSupplierResearch(job, attemptNumber, maxAttempts), {
+    productRequest: job.productRequest
+  });
   const mergedResearch = mergeResearch(job.research, attemptResearch);
   const trustedSupplierCount = mergedResearch.suppliers.length;
   const candidateCount = mergedResearch.candidateSources.length;
@@ -142,23 +144,19 @@ export async function runResearch(jobId) {
     job.researchFirstFoundAttempt = firstTrustedAttempt(job, attemptNumber);
   }
 
-  if (shouldRunConfirmationSearch(job, attemptNumber, trustedSupplierCount)) {
+  if (shouldRunAnotherResearchPass(attemptNumber)) {
     const nextResearchAt = addMinutes(new Date(), researchRetryDelayMinutes()).toISOString();
-    job.status = "human_review";
+    job.status = "researching";
     job.currentResearchAttempt = null;
     job.nextResearchAt = nextResearchAt;
     job.nextUpdateAt = addHours(new Date(), config.updateIntervalHours).toISOString();
-    addTimeline(job, "research_more_scheduled", `Supplier options are ready. One extra expansion check is scheduled for ${formatJohannesburg(nextResearchAt)} to find any missed choices before Arcovia picks a supplier.`, {
+    addTimeline(job, "research_more_scheduled", `Deep research pass ${attemptNumber + 1} of ${maxAttempts} is scheduled for ${formatJohannesburg(nextResearchAt)}. Arcovia will complete all ${maxAttempts} passes before sending final customer options or the no-supplier email.`, {
       suppliers: trustedSupplierCount,
       nextResearchAt,
       nextAttempt: attemptNumber + 1,
       maxAttempts
     });
     upsertJob(job);
-
-    if (!hadTrustedBefore) {
-      await sendEmail({ to: config.adminEmail, ...adminReport(job) });
-    }
     return;
   }
 
@@ -169,7 +167,7 @@ export async function runResearch(jobId) {
     job.nextResearchAt = null;
     job.nextUpdateAt = addHours(new Date(), config.updateIntervalHours).toISOString();
     job.customerOptionsToken ||= randomUUID();
-    addTimeline(job, "research_completed", `Deep sourcing is complete under the new policy. Supplier shortlist is ready for Arcovia human review.`, {
+    addTimeline(job, "research_completed", `All ${maxAttempts} deep sourcing passes are complete. Supplier shortlist is ready for Arcovia human review.`, {
       suppliers: trustedSupplierCount,
       attempts: attemptNumber
     });
@@ -189,10 +187,10 @@ export async function runResearch(jobId) {
     return;
   }
 
-  if (attemptNumber >= noMatchAttemptLimit()) {
+  if (attemptNumber >= maxAttempts) {
     job.status = "refund_due";
     job.refundStatus = "manual_refund_required";
-    job.refundReason = `No trusted source found after the initial super-deep search and ${noMatchRetryCount()} retry search(es).`;
+    job.refundReason = `No trusted supplier found after all ${maxAttempts} deep sourcing pass(es).`;
     job.researchCompletedAt = new Date().toISOString();
     job.currentResearchAttempt = null;
     job.nextResearchAt = null;
@@ -345,6 +343,7 @@ ${previousSummary}
 
 Objective:
 Find every realistic way Arcovia can source this request. The customer may need a product, local service provider, manufacturer/factory, fabric/textile supplier, wholesaler, distributor, physical store, or import route. The first check must be one super-deep search that finds as many real choices as possible, not a small surface-level search. Do not stop at normal Google-style surface results.
+This order must receive exactly ${maxAttempts} completed deep sourcing passes before Arcovia sends final customer options or a no-supplier/refund email, unless Arcovia has already manually selected a supplier.
 
 Pass-specific instruction:
 ${passInstructions}
@@ -368,7 +367,8 @@ Rules:
 - Do not invent availability, prices, reviews, addresses, social pages, or ratings.
 - If a price is visible, include currency and total estimate. If shipping/import fees are separate, note that.
 - For every source, include image_url for the best direct product/provider image and image_urls with up to 5 useful angles/images when the product page, provider page, marketplace result, official brand page, or safe reference result exposes them.
-- If the supplier/source page has no images, use reference_image_urls only for clearly matching reference images found from search or official product pages. Do not use random unrelated images.
+- Only include images that clearly show the requested item, service proof/portfolio, manufacturer capability, or fabric/material match. Do not include random Google images, logos, banners, header images, payment icons, social profile pictures, unrelated stock photos, category thumbnails, or generic brand images.
+- If the supplier/source page has no images, use reference_image_urls only for clearly matching reference images from an official product/brand page or a search result whose title/URL matches the requested product. If image relevance is uncertain, leave image_url blank and image_urls/reference_image_urls empty.
 - For rejected_sources, also include image_url and image_urls if real item/source images were visible; otherwise return empty strings/arrays.
 - Sort final trusted sources from most expensive to cheapest.
 - Return at most ${finalSourceLimit()} final trusted/needs-more-checks sources, up to 8 shipping agents, and up to 20 rejected sources.
@@ -723,24 +723,23 @@ function summarizeUnstructuredResult(text) {
 }
 
 function maxResearchAttempts() {
-  const configured = Math.max(1, Math.floor(Number(config.deepResearchMaxAttempts || policyMaxAttempts())));
-  return Math.max(noMatchAttemptLimit(), Math.min(configured, policyMaxAttempts()));
+  return REQUIRED_DEEP_RESEARCH_ATTEMPTS;
 }
 
 function policyMaxAttempts() {
-  return noMatchAttemptLimit() + confirmationChecksAfterFound();
+  return maxResearchAttempts();
 }
 
 function noMatchRetryCount() {
-  return Math.max(0, Math.floor(Number(config.deepResearchNoMatchRetries ?? 2)));
+  return maxResearchAttempts() - 1;
 }
 
 function noMatchAttemptLimit() {
-  return 1 + noMatchRetryCount();
+  return maxResearchAttempts();
 }
 
 function confirmationChecksAfterFound() {
-  return Math.max(0, Math.floor(Number(config.deepResearchConfirmationChecksAfterFound ?? 1)));
+  return maxResearchAttempts() - 1;
 }
 
 function finalSourceLimit() {
@@ -749,15 +748,7 @@ function finalSourceLimit() {
 
 function hasCompletedResearchPolicy(job) {
   const completedAttempts = Number(job.researchAttemptCount || 0);
-  const trustedSupplierCount = Number(job.research?.suppliers?.length || 0);
-  if (trustedSupplierCount > 0) {
-    const requiredAttempt = Math.min(
-      firstTrustedAttempt(job, completedAttempts || 1) + confirmationChecksAfterFound(),
-      maxResearchAttempts()
-    );
-    return completedAttempts >= requiredAttempt;
-  }
-  return completedAttempts >= noMatchAttemptLimit();
+  return completedAttempts >= maxResearchAttempts();
 }
 
 function settleCompletedPolicyJob(job) {
@@ -780,7 +771,7 @@ function settleCompletedPolicyJob(job) {
   const changed = job.status !== "refund_due" || job.nextResearchAt || job.currentResearchAttempt;
   job.status = "refund_due";
   job.refundStatus = "manual_refund_required";
-  job.refundReason ||= `No trusted source found after the initial super-deep search and ${noMatchRetryCount()} retry search(es).`;
+  job.refundReason ||= `No trusted supplier found after all ${maxResearchAttempts()} deep sourcing pass(es).`;
   job.currentResearchAttempt = null;
   job.nextResearchAt = null;
   job.nextUpdateAt = null;
@@ -791,11 +782,8 @@ function settleCompletedPolicyJob(job) {
   upsertJob(job);
 }
 
-function shouldRunConfirmationSearch(job, attemptNumber, trustedSupplierCount) {
-  if (trustedSupplierCount <= 0) return false;
-  const firstFoundAttempt = firstTrustedAttempt(job, attemptNumber);
-  const requiredAttempt = Math.min(firstFoundAttempt + confirmationChecksAfterFound(), maxResearchAttempts());
-  return attemptNumber < requiredAttempt;
+function shouldRunAnotherResearchPass(attemptNumber) {
+  return attemptNumber < maxResearchAttempts();
 }
 
 function firstTrustedAttempt(job, fallbackAttempt) {
