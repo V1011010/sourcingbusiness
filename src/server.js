@@ -21,7 +21,7 @@ const server = http.createServer(async (req, res) => {
         features: {
           shopifyOrderEnrichment: true,
           safeOrderResearchRetry: true,
-          cappedOpenAIResearchTokens: true,
+          cappedHostedResearchTokens: true,
           deepResearchLoop: true,
           deepResearchPolicy: researchPolicy,
           deepResearchMaxAttempts: researchPolicy.maxTotalAttempts,

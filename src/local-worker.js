@@ -233,10 +233,10 @@ export async function handleLocalWorkerReport(req, res) {
 
 export function localWorkerHealthFeatures() {
   return {
-    localCodexWorkerEnabled: config.localCodexWorkerEnabled,
-    localCodexWorkerEndpoints: true,
-    localCodexWorkerLeaseMinutes: localWorkerLeaseMinutes(),
-    localCodexWorkerTrustScoreNormalization: "accepts_0_to_1_or_0_to_100",
+    localSourcingWorkerEnabled: config.localCodexWorkerEnabled,
+    localSourcingWorkerEndpoints: true,
+    localSourcingWorkerLeaseMinutes: localWorkerLeaseMinutes(),
+    localSourcingWorkerTrustScoreNormalization: "accepts_0_to_1_or_0_to_100",
     silentLocalWorkerReportReplay: true,
     localWorkerCompletedJobClaimGuard: true,
     ...imageEnrichmentHealthFeatures()
@@ -381,7 +381,7 @@ function settleCompletedPolicyJob(job, policy = researchPolicySummary()) {
     job.researchCompletedAt ||= now;
     job.customerOptionsToken ||= randomUUID();
     if (changed) {
-      addTimeline(job, "research_completed", `Saved job already has ${policy.maxTotalAttempts} completed local Codex research pass(es). No further worker checks are scheduled unless Arcovia requeues it.`, {
+      addTimeline(job, "research_completed", `Saved job already has ${policy.maxTotalAttempts} completed sourcing research pass(es). No further worker checks are scheduled unless Arcovia requeues it.`, {
         suppliers: trustedSupplierCount,
         attempts: job.researchAttemptCount || 0
       });
@@ -442,7 +442,7 @@ function researchPassTitle(job, attemptNumber) {
 
 function summarizePreviousAttempts(job) {
   const attempts = (job.researchAttempts || []).slice(-3);
-  if (!attempts.length) return "No previous local Codex sourcing checks for this order.";
+  if (!attempts.length) return "No previous local sourcing checks for this order.";
   return attempts.map((attempt) => {
     return `Check ${attempt.attempt}: ${attempt.trustedSupplierCount || 0} trusted, ${attempt.candidateCount || 0} candidates, ${attempt.rejectedSourceCount || 0} rejected. ${attempt.summary || ""}`;
   }).join("\n");

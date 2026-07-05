@@ -21,7 +21,7 @@ export function imageEnrichmentHealthFeatures() {
   return {
     supplierImageUrlAutoEnrichment: true,
     supplierImageGalleryAutoEnrichment: true,
-    supplierImageSources: ["ai_image_url", "ai_image_urls", "og:image", "twitter:image", "json_ld_image", "direct_image_url", "html_img_src"],
+    supplierImageSources: ["research_image_url", "research_image_urls", "og:image", "twitter:image", "json_ld_image", "direct_image_url", "html_img_src"],
     supplierImageProductRelevanceFilter: true,
     supplierImageFetchLimitPerReport: MAX_IMAGE_FETCHES_PER_REPORT,
     supplierImageGalleryLimitPerSource: MAX_IMAGES_PER_SOURCE
