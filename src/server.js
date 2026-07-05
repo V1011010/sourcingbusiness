@@ -385,6 +385,10 @@ function monitorPageStyles() {
     .button.warning { background:#6b3d08; border-color:#b47915; }
     .button.success { background:#165c35; border-color:#2f8f58; }
     .empty-section { padding:14px; color:#d8b8c0; }
+    .setup-warning { border-color:#b47915; background:#211505; }
+    .setup-warning h2, .setup-warning h3 { color:#ffd88a; }
+    .setup-warning ol { margin:10px 0 0; padding-left:22px; color:#ead7dc; line-height:1.45; }
+    .setup-warning code { background:#0f0609; border:1px solid #4b1724; border-radius:8px; padding:2px 5px; color:#ffd7df; }
     .timeline-wrap { margin-top:16px; }
     @media (min-width: 760px) {
       .source-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
@@ -398,6 +402,35 @@ function monitorPageStyles() {
       .source-metrics { grid-template-columns:1fr; }
     }
   </style>`;
+}
+
+function storageWarningHtml() {
+  const storage = storageHealth();
+  if (storage.dataDirConfigured) return "";
+
+  return `<div class="card setup-warning">
+    <h2>Render storage is not persistent yet</h2>
+    <p class="muted">The tracking site is online, but Render is still using temporary file storage at <code>${escapeHtml(storage.dataDir)}</code>. If Render redeploys or restarts, saved sourcing jobs can disappear and this monitor will show no jobs.</p>
+    <ol>
+      <li>In Render, add a persistent disk to the Arcovia web service.</li>
+      <li>Use mount path <code>/var/data</code>.</li>
+      <li>Add environment variable <code>ARCOVIA_DATA_DIR=/var/data</code>.</li>
+      <li>Redeploy the service, then rerun Shopify Flow for any already-paid order.</li>
+    </ol>
+  </div>`;
+}
+
+function emptyJobsCard() {
+  return `<div class="card setup-warning">
+    <h2>No sourcing jobs found</h2>
+    <p class="muted">The backend currently has 0 stored jobs. If a customer already paid, open that Shopify order and manually run the Arcovia Flow again so Render receives the paid-order payload.</p>
+    <ol>
+      <li>Shopify Admin → Orders.</li>
+      <li>Open the paid sourcing-deposit order.</li>
+      <li>More actions → Run Flow automation.</li>
+      <li>Select the Arcovia sourcing workflow and run it.</li>
+    </ol>
+  </div>`;
 }
 
 function handleMonitorPage(_req, res, url) {
@@ -460,7 +493,8 @@ function handleMonitorPage(_req, res, url) {
     </div>
   </header>
   <main class="monitor-shell">
-    ${cards || `<div class="card"><h2>No sourcing jobs yet</h2><p class="muted">When a paid Shopify deposit starts sourcing, it will appear here.</p></div>`}
+    ${storageWarningHtml()}
+    ${cards || emptyJobsCard()}
   </main>
 </body>
 </html>`);
@@ -576,7 +610,7 @@ function handleReviewAllPage(_req, res) {
     <h1>Supplier review</h1>
     <div class="muted">No password. New orders appear here automatically. Do not share this internal page outside Arcovia.</div>
   </header>
-  <main class="monitor-shell">${cards || `<div class="card"><h2>No sourcing jobs yet</h2><p class="muted">When new paid deposit orders reach the sourcing system, they will appear here.</p></div>`}</main>
+  <main class="monitor-shell">${storageWarningHtml()}${cards || emptyJobsCard()}</main>
 </body>
 </html>`);
 }
@@ -841,6 +875,10 @@ function handleMonitorLitePage(_req, res) {
     .stat b { display:block; font-size:22px; }
     .stat span { color:#d8b8c0; font-size:12px; }
     .banner { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:12px; }
+    .setup-warning { border-color:#b47915; background:#211505; }
+    .setup-warning h2, .setup-warning h3 { color:#ffd88a; }
+    .setup-warning ol { margin:10px 0 0; padding-left:22px; color:#ead7dc; line-height:1.45; }
+    .setup-warning code { background:#0f0609; border:1px solid #4b1724; border-radius:8px; padding:2px 5px; color:#ffd7df; }
     @media (min-width: 760px) { .stats { grid-template-columns:repeat(5,minmax(0,1fr)); } }
   </style>
 </head>
@@ -855,7 +893,8 @@ function handleMonitorLitePage(_req, res) {
     </div>
   </header>
   <main class="grid">
-    ${cards || `<div class="card"><h2>No sourcing jobs yet</h2><p class="muted">When a paid Shopify deposit starts sourcing, it will appear here.</p></div>`}
+    ${storageWarningHtml()}
+    ${cards || emptyJobsCard()}
   </main>
 </body>
 </html>`);
