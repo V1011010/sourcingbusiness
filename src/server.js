@@ -6,7 +6,7 @@ import { isResearchRunning, queueDueResearchAttempts, queueResearch, researchPol
 import { handleLocalWorkerClaim, handleLocalWorkerReport, localWorkerHealthFeatures } from "./local-worker.js";
 import { fetchShopifyOrderDetails } from "./shopify.js";
 import { adminRefundDue, customerOptionSelectedAdmin, customerRefundDue, depositReceived, stageUpdate } from "./templates.js";
-import { addTimeline, getJob, readJobs, upsertJob } from "./storage.js";
+import { addTimeline, getJob, readJobs, storageHealth, upsertJob } from "./storage.js";
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -46,7 +46,8 @@ const server = http.createServer(async (req, res) => {
           expandedCategoryIntake: true,
           missingBriefFixLinks: true,
           refundDueStatus: true,
-          adminJobsEndpoint: Boolean(config.adminStatusSecret || config.flowSecret)
+          adminJobsEndpoint: Boolean(config.adminStatusSecret || config.flowSecret),
+          storage: storageHealth()
         }
       });
     }

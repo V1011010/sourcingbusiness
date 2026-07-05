@@ -76,8 +76,9 @@ Steps:
    - Start Command: `node src/server.js`
    - Runtime: Node
 8. Add environment variables from `.env.example`.
-9. Deploy.
-10. Copy the public URL Render gives you, for example:
+9. For production, add a persistent disk in Render and set `ARCOVIA_DATA_DIR` to the disk mount path, for example `/var/data`.
+10. Deploy.
+11. Copy the public URL Render gives you, for example:
 
 ```text
 https://sourcingbusiness.onrender.com
@@ -190,6 +191,7 @@ Copy `.env.example` to `.env` and fill:
 PORT=8787
 PUBLIC_BASE_URL=https://sourcingbusiness.onrender.com
 ARCOVIA_FLOW_SECRET=YOUR_LONG_RANDOM_SECRET
+ARCOVIA_DATA_DIR=/var/data
 OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-5.5
 RESEND_API_KEY=re_...

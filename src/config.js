@@ -37,6 +37,7 @@ export const config = {
   replyToEmail: process.env.REPLY_TO_EMAIL || process.env.REPLY_TO || "arcovia.africa@gmail.com",
   adminEmail: process.env.ADMIN_EMAIL || "vutlharingobeni5@gmail.com",
   adminStatusSecret: process.env.ARCOVIA_ADMIN_STATUS_SECRET || "",
+  dataDir: process.env.ARCOVIA_DATA_DIR || process.env.DATA_DIR || "data",
   updateIntervalHours: Number(process.env.UPDATE_INTERVAL_HOURS || 6),
   maxSourcingDays: Number(process.env.MAX_SOURCING_DAYS || 14),
   deepResearchMaxAttempts: Number(process.env.DEEP_RESEARCH_MAX_ATTEMPTS || 3),

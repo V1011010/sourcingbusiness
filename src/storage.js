@@ -1,9 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { config } from "./config.js";
 
-const dbPath = resolve("data/jobs.json");
-const outboxPath = resolve("data/outbox.json");
+const dataDir = config.dataDir || "data";
+const dbPath = resolve(dataDir, "jobs.json");
+const outboxPath = resolve(dataDir, "outbox.json");
 
 function ensureFile(path, fallback) {
   const dir = dirname(path);
@@ -56,4 +58,11 @@ export function appendOutbox(message) {
     at: new Date().toISOString()
   });
   writeFileSync(outboxPath, JSON.stringify(current, null, 2));
+}
+
+export function storageHealth() {
+  return {
+    dataDirConfigured: dataDir !== "data",
+    dataDir
+  };
 }

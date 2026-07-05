@@ -60,6 +60,7 @@ Fill in `.env`:
 - `RESEARCH_TECHNICAL_RETRY_DELAY_MINUTES` defaults to `15`; technical API/rate-limit errors retry quickly and do not count as one of the sourcing checks
 - `LOCAL_CODEX_WORKER_ENABLED=true` makes the hosted backend wait for the local Codex worker instead of calling OpenAI directly
 - `ARCOVIA_LOCAL_WORKER_SECRET` can be set separately; if blank, the worker uses `ARCOVIA_FLOW_SECRET`
+- `ARCOVIA_DATA_DIR` can point to a persistent storage directory, for example a Render persistent disk mount path
 
 Start:
 
@@ -126,6 +127,19 @@ How it works:
 6. Arcovia reviews suppliers in `/review` and manually chooses one.
 
 Keep the PC awake, online, and signed in. If the local session logs out or the PC sleeps, new research jobs wait until the worker is running again.
+
+## Persistent job storage
+
+By default, this app stores jobs in `data/jobs.json`. That is fine locally, but hosted services can lose local files when they redeploy or restart unless persistent storage is attached.
+
+For Render production use:
+
+1. Add a persistent disk to the web service.
+2. Use a mount path such as `/var/data`.
+3. Set the Render environment variable `ARCOVIA_DATA_DIR=/var/data`.
+4. Redeploy.
+
+After that, `/health` will show `features.storage.dataDirConfigured: true`.
 
 ## Shopify Flow setup
 
