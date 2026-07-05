@@ -20,6 +20,14 @@
           "url": { "type": "string" },
           "product_match": { "type": "string" },
           "image_url": { "type": "string" },
+          "image_urls": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "reference_image_urls": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
           "price": { "type": "string" },
           "estimated_total_zar": { "type": "string" },
           "estimated_total_to_customer": { "type": "string" },
@@ -63,6 +71,8 @@
           "url",
           "product_match",
           "image_url",
+          "image_urls",
+          "reference_image_urls",
           "price",
           "estimated_total_zar",
           "estimated_total_to_customer",
@@ -118,13 +128,17 @@
           "name": { "type": "string" },
           "url": { "type": "string" },
           "image_url": { "type": "string" },
+          "image_urls": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
           "reason": { "type": "string" },
           "evidence_urls": {
             "type": "array",
             "items": { "type": "string" }
           }
         },
-        "required": ["name", "url", "image_url", "reason", "evidence_urls"],
+        "required": ["name", "url", "image_url", "image_urls", "reason", "evidence_urls"],
         "additionalProperties": false
       }
     },

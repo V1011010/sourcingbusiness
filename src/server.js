@@ -39,6 +39,7 @@ const server = http.createServer(async (req, res) => {
           allOrdersSupplierReview: true,
           anonymizedCustomerOptionsPage: true,
           anonymizedCustomerImageProxy: true,
+          multiImageSupplierGalleries: true,
           customerSupplierChoiceCapture: true,
           resendDefaultSenderFallback: true,
           resendReplyToAddress: Boolean(config.replyToEmail),
@@ -356,12 +357,15 @@ function monitorPageStyles() {
     .section-subtitle { color:#d8b8c0; display:block; font-size:12px; font-weight:500; margin-top:3px; }
     .count-badge { min-width:34px; text-align:center; border-radius:999px; padding:6px 9px; background:#7a1028; color:#fff; font-weight:900; }
     .source-grid { display:grid; gap:12px; padding:14px; }
-    .source-card { display:grid; grid-template-columns:88px minmax(0,1fr); gap:14px; border:1px solid #32101a; background:#0b0407; border-radius:16px; padding:12px; }
+    .source-card { display:grid; grid-template-columns:minmax(96px,168px) minmax(0,1fr); gap:14px; border:1px solid #32101a; background:#0b0407; border-radius:16px; padding:12px; }
     .source-card.rejected { border-color:#4b1724; background:#110609; }
     .source-card.approved { border-color:#245b3b; background:#07170f; }
     .source-card.candidate { border-color:#72551d; background:#151006; }
-    .source-image { width:88px; height:88px; border-radius:14px; border:1px solid #34111a; object-fit:cover; background:#1a0a0f; display:block; }
-    .image-fallback { width:88px; height:88px; border-radius:14px; border:1px dashed #562033; background:linear-gradient(145deg,#1d0a10,#080406); color:#d8b8c0; display:flex; align-items:center; justify-content:center; text-align:center; font-size:11px; line-height:1.2; padding:8px; }
+    .source-gallery { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; align-content:start; }
+    .source-gallery.single { grid-template-columns:1fr; }
+    .source-image { width:100%; height:82px; border-radius:14px; border:1px solid #34111a; object-fit:cover; background:#1a0a0f; display:block; }
+    .source-gallery.single .source-image { height:120px; }
+    .image-fallback { width:100%; min-height:96px; border-radius:14px; border:1px dashed #562033; background:linear-gradient(145deg,#1d0a10,#080406); color:#d8b8c0; display:flex; align-items:center; justify-content:center; text-align:center; font-size:11px; line-height:1.2; padding:8px; }
     .source-title { margin:0; font-size:16px; font-weight:900; color:#fff; line-height:1.25; }
     .source-type { color:#d8b8c0; font-size:12px; margin-top:3px; }
     .source-metrics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:10px 0; }
@@ -389,7 +393,7 @@ function monitorPageStyles() {
     @media (max-width: 560px) {
       .job-head { display:block; }
       .source-card { grid-template-columns:1fr; }
-      .source-image, .image-fallback { width:100%; height:180px; }
+      .source-image, .source-gallery.single .source-image, .image-fallback { width:100%; height:180px; }
       .source-metrics { grid-template-columns:1fr; }
     }
   </style>`;
@@ -652,10 +656,13 @@ function handleCustomerOptionsPage(_req, res, token, url) {
     .notice { border:1px solid #4b1724; background:#12070b; border-radius:16px; padding:14px; margin:14px 0; line-height:1.45; }
     .notice.success { border-color:#2f8f58; background:#092014; }
     .options-grid { display:grid; gap:14px; margin-top:16px; }
-    .option-card { display:grid; grid-template-columns:140px minmax(0,1fr); gap:16px; border:1px solid #4b1724; background:#13080c; border-radius:20px; padding:14px; box-shadow:0 12px 30px rgba(0,0,0,.22); }
+    .option-card { display:grid; grid-template-columns:minmax(160px,230px) minmax(0,1fr); gap:16px; border:1px solid #4b1724; background:#13080c; border-radius:20px; padding:14px; box-shadow:0 12px 30px rgba(0,0,0,.22); }
     .option-card.chosen { border-color:#2f8f58; background:#07170f; }
-    .option-image { width:140px; height:140px; border-radius:16px; border:1px solid #34111a; object-fit:cover; background:#1a0a0f; display:block; }
-    .image-fallback { width:140px; height:140px; border-radius:16px; border:1px dashed #562033; background:linear-gradient(145deg,#1d0a10,#080406); color:#d8b8c0; display:flex; align-items:center; justify-content:center; text-align:center; font-size:12px; line-height:1.25; padding:10px; }
+    .option-gallery { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; align-content:start; }
+    .option-gallery.single { grid-template-columns:1fr; }
+    .option-image { width:100%; height:108px; border-radius:16px; border:1px solid #34111a; object-fit:cover; background:#1a0a0f; display:block; }
+    .option-gallery.single .option-image { height:190px; }
+    .image-fallback { width:100%; min-height:170px; border-radius:16px; border:1px dashed #562033; background:linear-gradient(145deg,#1d0a10,#080406); color:#d8b8c0; display:flex; align-items:center; justify-content:center; text-align:center; font-size:12px; line-height:1.25; padding:10px; }
     .price { display:inline-block; margin:4px 0 10px; padding:10px 12px; border-radius:14px; background:#7a1028; border:1px solid #bc3456; font-weight:900; }
     .details { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:10px 0; }
     .detail { border:1px solid #2d1018; border-radius:12px; padding:9px; background:#0f0609; min-width:0; }
@@ -666,7 +673,7 @@ function handleCustomerOptionsPage(_req, res, token, url) {
     @media (min-width: 760px) { .options-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
     @media (max-width: 620px) {
       .option-card { grid-template-columns:1fr; }
-      .option-image, .image-fallback { width:100%; height:210px; }
+      .option-image, .option-gallery.single .option-image, .image-fallback { width:100%; height:210px; }
       .details { grid-template-columns:1fr; }
     }
   </style>
@@ -730,9 +737,10 @@ async function handleCustomerOptionImage(_req, res, pathname) {
   const parts = pathname.split("/").filter(Boolean);
   const token = decodeURIComponent(parts[1] || "");
   const optionIndex = Number(parts[2]);
+  const imageIndex = Math.max(0, Number(parts[3] || 0));
   const job = getJobByCustomerOptionsToken(token);
   const source = job?.research?.suppliers?.[optionIndex] || null;
-  const imageUrl = customerOptionImageUrl(job, optionIndex);
+  const imageUrl = customerOptionImageUrls(job, optionIndex)[imageIndex] || "";
 
   if (!job || !source || !isSafeImageUrl(imageUrl)) {
     return customerImagePlaceholder(res);
@@ -1092,10 +1100,11 @@ function customerOptionCard(source, index, token, selected, job) {
   const isChosen = selected && selectedIndex === index;
   const isLocked = Boolean(selected);
   const overBudget = source.over_budget ? "May be above your stated budget" : "Budget fit not confirmed";
+  const imageCount = customerOptionImageUrls(job, index).length;
   const imageNote = hasSourceImage(source)
-    ? "Option image"
-    : customerOptionImageUrl(job, index)
-      ? "Reference item image"
+    ? `${imageCount || 1} option image${imageCount === 1 ? "" : "s"}`
+    : imageCount
+      ? `${imageCount} reference image${imageCount === 1 ? "" : "s"}`
       : "Image pending";
 
   return `<article class="option-card ${isChosen ? "chosen" : ""}">
@@ -1107,7 +1116,7 @@ function customerOptionCard(source, index, token, selected, job) {
         <div class="detail"><span>Listed price</span><b>${escapeHtml(source.price || "Not captured")}</b></div>
         <div class="detail"><span>Availability</span><b>${escapeHtml(source.availability || "To be confirmed")}</b></div>
         <div class="detail"><span>Budget note</span><b>${escapeHtml(overBudget)}</b></div>
-        <div class="detail"><span>Image</span><b>${escapeHtml(imageNote)}</b></div>
+        <div class="detail"><span>Images</span><b>${escapeHtml(imageNote)}</b></div>
       </div>
       <p class="muted">Provider/source identity, websites, and sourcing evidence are kept private by Arcovia. Final availability, delivery, and total cost still need confirmation.</p>
       ${isChosen
@@ -1124,9 +1133,12 @@ function customerOptionCard(source, index, token, selected, job) {
 }
 
 function customerOptionImageHtml(token, index, job) {
-  const imageUrl = customerOptionImageUrl(job, index);
-  if (isSafeImageUrl(imageUrl)) {
-    return `<img class="option-image" src="/options-image/${escapeHtml(token)}/${escapeHtml(index)}" alt="${escapeHtml(`${customerOptionLabel(job, index)} image`)}" loading="lazy" />`;
+  const imageUrls = customerOptionImageUrls(job, index);
+  if (imageUrls.length) {
+    const images = imageUrls.slice(0, 5).map((_imageUrl, imageIndex) => {
+      return `<img class="option-image" src="/options-image/${escapeHtml(token)}/${escapeHtml(index)}/${escapeHtml(imageIndex)}" alt="${escapeHtml(`${customerOptionLabel(job, index)} image ${imageIndex + 1}`)}" loading="lazy" />`;
+    }).join("");
+    return `<div class="option-gallery ${imageUrls.length === 1 ? "single" : ""}">${images}</div>`;
   }
   return `<div class="image-fallback">Product image<br>not available</div>`;
 }
@@ -1140,23 +1152,28 @@ function customerOptionLabel(job, index) {
 }
 
 function customerOptionImageUrl(job, index) {
-  const source = job?.research?.suppliers?.[index] || null;
-  const direct = sourceImageUrl(source);
-  if (isSafeImageUrl(direct)) return direct;
+  return customerOptionImageUrls(job, index)[0] || "";
+}
 
-  const fallbackImages = [
+function customerOptionImageUrls(job, index) {
+  const source = job?.research?.suppliers?.[index] || null;
+  const direct = sourceImageUrls(source);
+  if (direct.length) return direct.slice(0, 5);
+
+  const fallbackImages = uniqueImageUrls([
     ...(job?.research?.suppliers || []),
     ...(job?.research?.candidateSources || [])
   ]
-    .map(sourceImageUrl)
-    .filter(isSafeImageUrl);
+    .flatMap(sourceImageUrls)
+    .filter(isSafeImageUrl));
 
-  if (!fallbackImages.length) return "";
-  return fallbackImages[index % fallbackImages.length];
+  if (!fallbackImages.length) return [];
+  const start = index % fallbackImages.length;
+  return [...fallbackImages.slice(start), ...fallbackImages.slice(0, start)].slice(0, 5);
 }
 
 function hasSourceImage(source) {
-  return isSafeImageUrl(sourceImageUrl(source));
+  return sourceImageUrls(source).length > 0;
 }
 
 function sourceCard(source, index, { group, cardType, formAction, formAuthFields, job }) {
@@ -1252,15 +1269,57 @@ function customerSelectedOptionBox(selectedOption, job = {}) {
 }
 
 function sourceImageHtml(source) {
-  const imageUrl = sourceImageUrl(source);
-  if (isSafeImageUrl(imageUrl)) {
-    return `<img class="source-image" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(source.name || "Product image")}" loading="lazy" referrerpolicy="no-referrer" />`;
+  const imageUrls = sourceImageUrls(source);
+  if (imageUrls.length) {
+    const images = imageUrls.slice(0, 5).map((imageUrl, imageIndex) => {
+      return `<img class="source-image" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(source.name || "Product image")} image ${escapeHtml(imageIndex + 1)}" loading="lazy" referrerpolicy="no-referrer" />`;
+    }).join("");
+    return `<div class="source-gallery ${imageUrls.length === 1 ? "single" : ""}">${images}</div>`;
   }
   return `<div class="image-fallback">No item<br>image yet</div>`;
 }
 
 function sourceImageUrl(source) {
-  return source?.image_url || source?.product_image_url || source?.item_image_url || source?.image || "";
+  return sourceImageUrls(source)[0] || "";
+}
+
+function sourceImageUrls(source) {
+  return uniqueImageUrls([
+    source?.image_url,
+    source?.product_image_url,
+    source?.item_image_url,
+    source?.image,
+    source?.thumbnail_url,
+    source?.reference_image_url,
+    ...listFieldValues(source?.image_urls),
+    ...listFieldValues(source?.product_image_urls),
+    ...listFieldValues(source?.reference_image_urls)
+  ]);
+}
+
+function uniqueImageUrls(values) {
+  const seen = new Set();
+  const output = [];
+  for (const value of values || []) {
+    const imageUrl = String(value || "").trim();
+    if (!isSafeImageUrl(imageUrl)) continue;
+    const key = imageUrl.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(imageUrl);
+  }
+  return output;
+}
+
+function listFieldValues(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    return value
+      .split(/\n|,/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return [];
 }
 
 function customerImagePlaceholder(res) {

@@ -317,9 +317,10 @@ Required behavior:
 - Search online stores, physical stores, service providers, factories, boutiques, distributors, wholesalers, importers, marketplaces, resellers, and shipping/parcel-forwarding options as relevant.
 - Check trust signals for every candidate: customer reviews, HelloPeter where relevant, social media, public complaints, delivery/payment claims, business identity, contact details, refund policy, portfolios/project proof, and counterfeit/scam red flags.
 - Include options above the customer's budget if they are real and relevant.
-- For every source, include image_url when the product page or marketplace result exposes a real item image URL. Leave it blank if not confidently available.
+- For every source, include image_url for the best direct product/provider image and image_urls with up to 5 useful angles/images when the product page, provider page, marketplace result, official brand page, or safe reference result exposes them.
+- If the supplier/source page has no images, use reference_image_urls only for clearly matching reference images found from search or official product pages. Do not use random unrelated images.
 - For every source, include estimated_total_zar as the approximate total customer cost in South African Rand, including item price, known or estimated shipping, duties, VAT, and handling where possible. If it cannot be estimated, explain briefly such as "Needs checkout quote in ZAR".
-- For rejected_sources, also include image_url if a real item image was visible; otherwise return an empty string.
+- For rejected_sources, also include image_url and image_urls if real item/source images were visible; otherwise return empty strings/arrays.
 - Remove unsafe or untrusted sources from the final sources list and put them under rejected_sources with short factual reasons.
 - Do not invent prices, reviews, addresses, ratings, or availability.
 - Sort final trusted/needs-more-checks sources from most expensive to cheapest.
@@ -406,6 +407,8 @@ function normalizeSourceList(sources) {
     url: textValue(source.url || source.product_url || source.website),
     product_match: textValue(source.product_match || source.match),
     image_url: textValue(source.image_url || source.product_image_url || source.item_image_url || source.image || source.thumbnail_url),
+    image_urls: sourceImageUrlList(source),
+    reference_image_urls: listValues(source.reference_image_urls || source.reference_images).map(textValue).filter(Boolean),
     price: textValue(source.price || source.price_found),
     estimated_total_zar: textValue(source.estimated_total_zar || source.approx_total_zar || source.total_zar || source.rand_total),
     estimated_total_to_customer: textValue(source.estimated_total_to_customer || source.estimated_total || source.total_cost),
@@ -427,6 +430,7 @@ function normalizeRejectedSources(sources) {
     name: textValue(source.name || source.supplier_name || source.store || source.title),
     url: textValue(source.url || source.product_url || source.website),
     image_url: textValue(source.image_url || source.product_image_url || source.item_image_url || source.image || source.thumbnail_url),
+    image_urls: sourceImageUrlList(source),
     reason: textValue(source.reason || source.red_flag || source.summary),
     evidence_urls: listValues(source.evidence_urls || source.evidence || source.sources).map(textValue).filter(Boolean)
   })).filter((source) => source.name || source.url || source.reason);
@@ -515,6 +519,8 @@ function mergeDuplicateSource(existing, incoming) {
   for (const key of ["image_url", "estimated_total_zar", "estimated_total_to_customer", "price", "availability"]) {
     if (hasUsefulValue(incoming?.[key])) merged[key] = incoming[key];
   }
+  merged.image_urls = uniqueStrings([...(existing?.image_urls || []), ...(incoming?.image_urls || [])]).slice(0, 8);
+  merged.reference_image_urls = uniqueStrings([...(existing?.reference_image_urls || []), ...(incoming?.reference_image_urls || [])]).slice(0, 8);
   return merged;
 }
 
@@ -539,6 +545,19 @@ function uniqueByUrl(items) {
 
 function uniqueStrings(values) {
   return [...new Set(listValues(values).map(textValue).filter(Boolean))];
+}
+
+function sourceImageUrlList(source) {
+  return uniqueStrings([
+    source?.image_url,
+    source?.product_image_url,
+    source?.item_image_url,
+    source?.image,
+    source?.thumbnail_url,
+    ...(listValues(source?.image_urls)),
+    ...(listValues(source?.product_image_urls)),
+    ...(listValues(source?.reference_image_urls))
+  ]).slice(0, 8);
 }
 
 function finalSourceLimit() {
@@ -581,7 +600,14 @@ function json(res, status, data) {
 }
 
 function listValues(value) {
-  return Array.isArray(value) ? value.filter(Boolean) : [];
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (typeof value === "string") {
+    return value
+      .split(/\n|,/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return [];
 }
 
 function textValue(value) {

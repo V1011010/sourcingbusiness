@@ -32,6 +32,7 @@ Shopify Flow is the easiest for this store because Arcovia is on Shopify Advance
 - Keeps safe candidates above the customer's budget in the internal report in case there is no cheaper trustworthy option.
 - Sends regular customer updates while the search is in progress.
 - Sends the internal supplier report to Arcovia for human approval.
+- Captures multiple source/product images per option where available. If a source page has no image, the worker can add clearly matching reference images, but those are treated as reference images rather than supplier-owned proof.
 - Never buys from a supplier automatically.
 - If the initial super-deep search plus the no-match retries finish with no trusted source, marks the job `refund_due` and emails Arcovia/customer. The actual payment refund is still a manual Shopify/PayFast action until refund automation is separately tested.
 - Optional local Codex worker mode lets an always-on Windows PC run supplier research through the signed-in Codex CLI instead of the hosted OpenAI API.

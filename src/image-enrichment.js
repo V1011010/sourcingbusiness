@@ -2,6 +2,7 @@ const MAX_IMAGE_FETCHES_PER_REPORT = 30;
 const MAX_HTML_CHARS = 700_000;
 const FETCH_TIMEOUT_MS = 6_000;
 const IMAGE_FETCH_CONCURRENCY = 5;
+const MAX_IMAGES_PER_SOURCE = 5;
 
 export async function enrichResearchImages(research) {
   if (!research || typeof research !== "object") return research;
@@ -19,8 +20,10 @@ export async function enrichResearchImages(research) {
 export function imageEnrichmentHealthFeatures() {
   return {
     supplierImageUrlAutoEnrichment: true,
-    supplierImageSources: ["ai_image_url", "og:image", "twitter:image", "json_ld_image", "direct_image_url"],
-    supplierImageFetchLimitPerReport: MAX_IMAGE_FETCHES_PER_REPORT
+    supplierImageGalleryAutoEnrichment: true,
+    supplierImageSources: ["ai_image_url", "ai_image_urls", "og:image", "twitter:image", "json_ld_image", "direct_image_url", "html_img_src"],
+    supplierImageFetchLimitPerReport: MAX_IMAGE_FETCHES_PER_REPORT,
+    supplierImageGalleryLimitPerSource: MAX_IMAGES_PER_SOURCE
   };
 }
 
@@ -37,22 +40,35 @@ async function enrichSourceListImages(items, fetchBudget) {
 
 async function enrichSourceImage(source, fetchBudget) {
   if (!source || typeof source !== "object") return source;
-  if (hasImageUrl(source)) return source;
-  if (!isSafeHttpUrl(source.url)) return source;
-  if (fetchBudget.remaining <= 0) return source;
+  const existingImages = sourceImageUrls(source);
+  if (existingImages.length >= MAX_IMAGES_PER_SOURCE) {
+    return normalizeSourceImages(source, existingImages, source.image_source || "provided");
+  }
+  if (!isSafeHttpUrl(source.url) || fetchBudget.remaining <= 0) {
+    return normalizeSourceImages(source, existingImages, source.image_source || "provided");
+  }
 
   fetchBudget.remaining -= 1;
-  const discovered = await discoverImageFromPage(source.url);
-  if (!discovered) return source;
+  const discovered = await discoverImagesFromPage(source.url);
+  const images = uniqueImageUrls([...existingImages, ...discovered]).slice(0, MAX_IMAGES_PER_SOURCE);
+  if (!images.length) return source;
+
+  return normalizeSourceImages(source, images, discovered.length ? "page_metadata" : source.image_source || "provided");
+}
+
+function normalizeSourceImages(source, images, imageSource) {
+  const safeImages = uniqueImageUrls(images).slice(0, MAX_IMAGES_PER_SOURCE);
+  if (!safeImages.length) return source;
 
   return {
     ...source,
-    image_url: discovered,
-    image_source: "page_metadata"
+    image_url: source.image_url || safeImages[0],
+    image_urls: safeImages,
+    image_source: imageSource
   };
 }
 
-async function discoverImageFromPage(pageUrl) {
+async function discoverImagesFromPage(pageUrl) {
   try {
     const response = await fetch(pageUrl, {
       redirect: "follow",
@@ -63,29 +79,29 @@ async function discoverImageFromPage(pageUrl) {
       }
     });
 
-    if (!response.ok) return "";
+    if (!response.ok) return [];
     const contentType = response.headers.get("content-type") || "";
-    if (!contentType.toLowerCase().includes("html") && !contentType.toLowerCase().includes("text")) return "";
+    if (!contentType.toLowerCase().includes("html") && !contentType.toLowerCase().includes("text")) return [];
 
     const html = (await response.text()).slice(0, MAX_HTML_CHARS);
-    return bestImageFromHtml(html, response.url || pageUrl);
+    return bestImagesFromHtml(html, response.url || pageUrl);
   } catch {
-    return "";
+    return [];
   }
 }
 
-function bestImageFromHtml(html, baseUrl) {
-  const candidates = [
+function bestImagesFromHtml(html, baseUrl) {
+  return uniqueImageUrls([
     ...metaImageCandidates(html),
     ...linkImageCandidates(html),
     ...jsonLdImageCandidates(html),
+    ...htmlImageCandidates(html),
     ...directImageCandidates(html)
   ]
     .map((value) => absoluteUrl(value, baseUrl))
     .filter(isSafeImageUrl)
-    .filter((value) => !isLikelyIcon(value));
-
-  return candidates[0] || "";
+    .filter((value) => !isLikelyIcon(value)))
+    .slice(0, MAX_IMAGES_PER_SOURCE);
 }
 
 function metaImageCandidates(html) {
@@ -128,6 +144,28 @@ function jsonLdImageCandidates(html) {
     }
   }
   return candidates;
+}
+
+function htmlImageCandidates(html) {
+  const candidates = [];
+  const imgRegex = /<img\b[^>]*>/gi;
+  for (const match of html.matchAll(imgRegex)) {
+    const tag = match[0];
+    for (const attr of ["src", "data-src", "data-original", "data-image", "data-zoom-image"]) {
+      const value = attrValue(tag, attr);
+      if (value && looksLikeUsefulImageCandidate(value)) candidates.push(value);
+    }
+    candidates.push(...srcsetCandidates(attrValue(tag, "srcset")));
+    candidates.push(...srcsetCandidates(attrValue(tag, "data-srcset")));
+  }
+  return candidates;
+}
+
+function srcsetCandidates(value) {
+  return String(value || "")
+    .split(",")
+    .map((part) => part.trim().split(/\s+/)[0])
+    .filter(looksLikeUsefulImageCandidate);
 }
 
 function directImageCandidates(html) {
@@ -179,8 +217,44 @@ function absoluteUrl(value, baseUrl) {
   }
 }
 
-function hasImageUrl(source) {
-  return isSafeImageUrl(source.image_url || source.product_image_url || source.item_image_url || source.image || "");
+function sourceImageUrls(source) {
+  const values = [
+    source?.image_url,
+    source?.product_image_url,
+    source?.item_image_url,
+    source?.image,
+    source?.thumbnail_url,
+    source?.reference_image_url,
+    ...listValues(source?.image_urls),
+    ...listValues(source?.product_image_urls),
+    ...listValues(source?.reference_image_urls)
+  ];
+  return uniqueImageUrls(values);
+}
+
+function uniqueImageUrls(values) {
+  const seen = new Set();
+  const output = [];
+  for (const value of values || []) {
+    const imageUrl = String(value || "").trim();
+    if (!isSafeImageUrl(imageUrl)) continue;
+    const key = imageUrl.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(imageUrl);
+  }
+  return output;
+}
+
+function listValues(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    return value
+      .split(/\n|,/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return [];
 }
 
 function isSafeHttpUrl(value) {
@@ -199,6 +273,11 @@ function isSafeImageUrl(value) {
 
 function looksLikeImageUrl(value) {
   return /\.(jpg|jpeg|png|webp)(\?|#|$)/i.test(String(value || ""));
+}
+
+function looksLikeUsefulImageCandidate(value) {
+  const text = String(value || "");
+  return looksLikeImageUrl(text) || text.includes("cdn") || text.includes("media") || text.includes("image");
 }
 
 function isLikelyIcon(value) {
