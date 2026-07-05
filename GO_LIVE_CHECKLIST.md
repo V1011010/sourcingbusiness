@@ -1,4 +1,4 @@
-# Arcovia AI Sourcing Go-Live Checklist
+# Arcovia Sourcing Go-Live Checklist
 
 ## What Codex already prepared
 
@@ -8,7 +8,7 @@ The backend is already built in this folder. It can:
 - ignore non-deposit orders
 - create a sourcing job
 - collect missing customer product details
-- run AI supplier research
+- run supplier research
 - write/send customer updates
 - send Arcovia the internal supplier vetting report
 
@@ -18,7 +18,7 @@ You must create these yourself because they involve private accounts, billing, i
 
 ### 1. OpenAI API key
 
-Use this for the AI supplier research.
+Use this for hosted supplier research.
 
 Steps:
 
@@ -66,7 +66,7 @@ Recommended beginner route: Render.
 Steps:
 
 1. Create a GitHub account if you do not have one.
-2. Upload this `arcovia-ai-sourcing` folder to a new private GitHub repository.
+2. Upload this `arcovia-sourcing` folder to a new private GitHub repository.
 3. Go to `https://render.com`.
 4. Create an account and connect GitHub.
 5. Click **New > Web Service**.
@@ -91,7 +91,7 @@ PUBLIC_BASE_URL=https://sourcingbusiness.onrender.com
 
 ### 4. Shopify Flow workflow
 
-This makes Shopify call the AI backend only after the deposit is paid.
+This makes Shopify call the sourcing backend only after the deposit is paid.
 
 Steps:
 
@@ -107,7 +107,7 @@ ARC-DEPOSIT-250
 5. Add action: **Add order tags**:
 
 ```text
-arcovia-ai-sourcing, sourcing-started
+arcovia-sourcing, sourcing-started
 ```
 
 6. Add action: **Send HTTP request**.
@@ -226,9 +226,9 @@ Then create a test Shopify order for the R250 deposit, pay using your payment te
 
 ## Manual approval rule
 
-Do not let the AI buy automatically.
+Do not let the system buy automatically.
 
-The AI should:
+The sourcing system should:
 
 1. Research suppliers.
 2. Score trust.

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
-import { sendEmail } from "./email.js";
+import { sendCustomerEmail, sendEmail, sendSensitiveAdminEmailForJob } from "./email.js";
 import { enrichResearchImages, imageEnrichmentHealthFeatures } from "./image-enrichment.js";
 import { adminRefundDue, adminReport, customerOptionsReady, customerRefundDue } from "./templates.js";
 import { addTimeline, getJob, readJobs, upsertJob } from "./storage.js";
@@ -17,7 +17,7 @@ export async function handleLocalWorkerClaim(req, res) {
     return json(res, 200, {
       ok: true,
       claimed: false,
-      message: "No local Codex research jobs are ready."
+      message: "No sourcing research jobs are ready."
     });
   }
 
@@ -45,7 +45,7 @@ export async function handleLocalWorkerClaim(req, res) {
     leaseUntil
   };
 
-  addTimeline(job, "local_worker_claimed", `Local Codex worker claimed ${researchPassTitle(job, attemptNumber)} ${attemptNumber} of ${policy.maxTotalAttempts}.`, {
+  addTimeline(job, "local_worker_claimed", `Sourcing worker started ${researchPassTitle(job, attemptNumber)} ${attemptNumber} of ${policy.maxTotalAttempts}.`, {
     workerId,
     attempt: attemptNumber,
     maxAttempts: policy.maxTotalAttempts,
@@ -105,7 +105,7 @@ export async function handleLocalWorkerReport(req, res) {
     job.currentResearchAttempt = null;
     job.nextResearchAt = addMinutes(new Date(), localWorkerFailureRetryMinutes()).toISOString();
     job.localWorker = null;
-    addTimeline(job, "local_worker_failed", `Local Codex worker failed before completing research. Retry scheduled for ${formatJohannesburg(job.nextResearchAt)}.`, {
+    addTimeline(job, "local_worker_failed", `Sourcing research failed before completion. Retry scheduled for ${formatJohannesburg(job.nextResearchAt)}.`, {
       workerId,
       attempt: attemptNumber,
       error: safeError
@@ -141,10 +141,10 @@ export async function handleLocalWorkerReport(req, res) {
     rejectedSourceCount: attemptResearch.rejectedSources.length,
     shippingAgentCount: attemptResearch.shippingAgents.length,
     sourceCount: attemptResearch.webSources.length,
-    engine: "local_codex_worker"
+    engine: "local_sourcing_worker"
   });
 
-  addTimeline(job, "local_worker_report_received", `Local Codex worker finished ${researchPassTitle(job, attemptNumber)} ${attemptNumber}: ${trustedSupplierCount} trusted supplier(s), ${candidateCount} candidate(s), ${rejectedCount} rejected.`, {
+  addTimeline(job, "local_worker_report_received", `Sourcing worker finished ${researchPassTitle(job, attemptNumber)} ${attemptNumber}: ${trustedSupplierCount} trusted supplier(s), ${candidateCount} candidate(s), ${rejectedCount} rejected.`, {
     workerId,
     attempt: attemptNumber,
     trustedSupplierCount,
@@ -160,7 +160,7 @@ export async function handleLocalWorkerReport(req, res) {
   if (shouldRunAnotherLocalResearchPass(attemptNumber, policy)) {
     job.status = "researching";
     job.nextResearchAt = addMinutes(new Date(), researchRetryDelayMinutes()).toISOString();
-    addTimeline(job, "local_worker_more_scheduled", `Local Codex will run deep research pass ${attemptNumber + 1} of ${policy.maxTotalAttempts} at ${formatJohannesburg(job.nextResearchAt)}. Arcovia will complete all ${policy.maxTotalAttempts} passes before sending final customer options or the no-supplier email.`, {
+    addTimeline(job, "local_worker_more_scheduled", `The next deep research pass ${attemptNumber + 1} of ${policy.maxTotalAttempts} is scheduled for ${formatJohannesburg(job.nextResearchAt)}. Arcovia will complete all ${policy.maxTotalAttempts} passes before sending final customer options or the no-supplier email.`, {
       nextResearchAt: job.nextResearchAt,
       nextAttempt: attemptNumber + 1,
       maxAttempts: policy.maxTotalAttempts
@@ -175,17 +175,17 @@ export async function handleLocalWorkerReport(req, res) {
     job.researchCompletedAt = new Date().toISOString();
     job.nextResearchAt = null;
     job.customerOptionsToken ||= randomUUID();
-    addTimeline(job, "research_completed", `All ${policy.maxTotalAttempts} local Codex deep sourcing passes are complete. Supplier shortlist is ready for Arcovia human review.`, {
+    addTimeline(job, "research_completed", `All ${policy.maxTotalAttempts} deep sourcing passes are complete. Supplier shortlist is ready for Arcovia review.`, {
       suppliers: trustedSupplierCount,
       attempts: attemptNumber
     });
     upsertJob(job);
 
     if (!skipEmails) {
-      await sendEmail({ to: config.adminEmail, ...adminReport(job) });
+      await sendSensitiveAdminEmailForJob(job, adminReport(job));
     }
     if (!skipEmails && job.customerEmail && !job.customerOptionsSentAt) {
-      const emailResult = await sendEmail({ to: job.customerEmail, ...customerOptionsReady(job) });
+      const emailResult = await sendCustomerEmail({ to: job.customerEmail, ...customerOptionsReady(job) });
       if (emailResult.ok) {
         job.customerOptionsSentAt = new Date().toISOString();
         addTimeline(job, "customer_options_sent", "Anonymized approved-supplier options link sent to customer after research completion.");
@@ -201,7 +201,7 @@ export async function handleLocalWorkerReport(req, res) {
   if (attemptNumber >= policy.noMatchAttemptLimit) {
     job.status = "refund_due";
     job.refundStatus = "manual_refund_required";
-    job.refundReason = `No trusted supplier found by local Codex after all ${policy.maxTotalAttempts} deep sourcing pass(es).`;
+    job.refundReason = `No trusted supplier found after all ${policy.maxTotalAttempts} deep sourcing pass(es).`;
     job.researchCompletedAt = new Date().toISOString();
     job.nextResearchAt = null;
     job.nextUpdateAt = null;
@@ -214,14 +214,14 @@ export async function handleLocalWorkerReport(req, res) {
 
     if (!skipEmails) {
       await sendEmail({ to: config.adminEmail, ...adminRefundDue(job) });
-      await sendEmail({ to: job.customerEmail, ...customerRefundDue(job) });
+      await sendCustomerEmail({ to: job.customerEmail, ...customerRefundDue(job) });
     }
     return json(res, 200, { ok: true, status: job.status, suppliers: 0 });
   }
 
   job.status = "researching";
   job.nextResearchAt = addMinutes(new Date(), researchRetryDelayMinutes()).toISOString();
-  addTimeline(job, "local_worker_retry_scheduled", `Local Codex found no trusted supplier yet. Retry ${attemptNumber + 1} is scheduled for ${formatJohannesburg(job.nextResearchAt)}.`, {
+  addTimeline(job, "local_worker_retry_scheduled", `No trusted supplier passed checks yet. Retry ${attemptNumber + 1} is scheduled for ${formatJohannesburg(job.nextResearchAt)}.`, {
     nextResearchAt: job.nextResearchAt,
     nextAttempt: attemptNumber + 1,
     maxAttempts: policy.maxTotalAttempts
@@ -274,7 +274,7 @@ function normalizeLocalWorkerReport(report, attemptNumber) {
   const rawText = JSON.stringify(report || {}, null, 2);
 
   return {
-    summary: textValue(report?.summary) || "Local Codex returned a supplier research report.",
+    summary: textValue(report?.summary) || "Sourcing worker returned a supplier research report.",
     missingCustomerDetails: listValues(report?.missing_customer_details).map(textValue).filter(Boolean),
     suppliers: sortByMostExpensiveFirst(trustedSources),
     candidateSources: sortByMostExpensiveFirst(sources),
@@ -685,7 +685,7 @@ function clampScore(value) {
 }
 
 function safeWorkerError(error) {
-  return String(error?.message || error || "Unknown local Codex worker error")
+  return String(error?.message || error || "Unknown sourcing worker error")
     .replace(/sk-[A-Za-z0-9_-]+/g, "[redacted-api-key]")
     .slice(0, 2000);
 }

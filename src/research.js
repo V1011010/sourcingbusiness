@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
-import { sendEmail } from "./email.js";
+import { sendCustomerEmail, sendEmail, sendSensitiveAdminEmailForJob } from "./email.js";
 import { enrichResearchImages } from "./image-enrichment.js";
 import {
   adminRefundDue,
@@ -49,7 +49,7 @@ export function queueDueResearchAttempts() {
       const maxReasonableNext = addMinutes(now, allowedScheduleDelayMinutes(job) + 1);
       if (new Date(job.nextResearchAt) > maxReasonableNext) {
         job.nextResearchAt = null;
-        addTimeline(job, "research_schedule_shortened", "Next AI research check was moved forward to keep the deep-search policy active.");
+        addTimeline(job, "research_schedule_shortened", "Next sourcing research check was moved forward to keep the deep-search policy active.");
         upsertJob(job);
       } else {
         continue;
@@ -102,7 +102,7 @@ export async function runResearch(jobId) {
   upsertJob(job);
 
   if (attemptNumber === 1) {
-    await sendEmail({ to: job.customerEmail, ...stageUpdate(job) });
+    await sendCustomerEmail({ to: job.customerEmail, ...stageUpdate(job) });
   }
 
   const attemptResearch = await enrichResearchImages(await performSupplierResearch(job, attemptNumber, maxAttempts), {
@@ -173,9 +173,9 @@ export async function runResearch(jobId) {
     });
     upsertJob(job);
 
-    await sendEmail({ to: config.adminEmail, ...adminReport(job) });
+    await sendSensitiveAdminEmailForJob(job, adminReport(job));
     if (job.customerEmail && !job.customerOptionsSentAt) {
-      const emailResult = await sendEmail({ to: job.customerEmail, ...customerOptionsReady(job) });
+      const emailResult = await sendCustomerEmail({ to: job.customerEmail, ...customerOptionsReady(job) });
       if (emailResult.ok) {
         job.customerOptionsSentAt = new Date().toISOString();
         addTimeline(job, "customer_options_sent", "Anonymized approved-supplier options link sent to customer after research completion.");
@@ -203,7 +203,7 @@ export async function runResearch(jobId) {
     upsertJob(job);
 
     await sendEmail({ to: config.adminEmail, ...adminRefundDue(job) });
-    await sendEmail({ to: job.customerEmail, ...customerRefundDue(job) });
+    await sendCustomerEmail({ to: job.customerEmail, ...customerRefundDue(job) });
     return;
   }
 
@@ -243,7 +243,7 @@ async function handleResearchError(jobId, error) {
     job.currentResearchAttempt = null;
     job.lastResearchError = safeMessage;
     job.nextResearchAt = nextResearchAt;
-    addTimeline(job, "research_retry_scheduled", `${technicalError ? "AI research hit a technical/API limit before the check completed" : `AI research hit an error on check ${originalAttempts}`}. A retry is scheduled for ${formatJohannesburg(nextResearchAt)}.`, {
+    addTimeline(job, "research_retry_scheduled", `${technicalError ? "Supplier research hit a technical/config limit before the check completed" : `Supplier research hit an error on check ${originalAttempts}`}. A retry is scheduled for ${formatJohannesburg(nextResearchAt)}.`, {
       error: safeMessage,
       technicalError,
       nextResearchAt,
@@ -297,7 +297,7 @@ async function performSupplierResearch(job, attemptNumber, maxAttempts) {
 
   const body = await response.text();
   if (!response.ok) {
-    throw new Error(`OpenAI research failed: ${response.status} ${body}`);
+    throw new Error(`Research request failed: ${response.status} ${body}`);
   }
 
   const data = JSON.parse(body);
@@ -618,7 +618,7 @@ function parsePartialJsonReport(text) {
   if (!sources.length && !shippingAgents.length && !rejectedSources.length) return null;
 
   return {
-    summary: extractJsonStringField(text, "summary") || "AI research returned partial structured JSON. Review raw report for any truncated fields.",
+    summary: extractJsonStringField(text, "summary") || "Research returned partial structured JSON. Review raw report for any truncated fields.",
     missing_customer_details: extractJsonStringArray(text, "missing_customer_details"),
     sources,
     shipping_agents: shippingAgents,
@@ -718,8 +718,8 @@ function summarizePreviousAttempts(job) {
 }
 
 function summarizeUnstructuredResult(text) {
-  if (!text?.trim()) return "AI research returned no structured report.";
-  return `AI research returned an unstructured report. Review raw text.`;
+  if (!text?.trim()) return "Research returned no structured report.";
+  return `Research returned an unstructured report. Review raw text.`;
 }
 
 function maxResearchAttempts() {
@@ -762,7 +762,7 @@ function settleCompletedPolicyJob(job) {
     job.nextResearchAt = null;
     job.researchCompletedAt ||= now;
     if (changed) {
-      addTimeline(job, "research_completed", "Saved job already satisfies the new deep-search policy. No further AI checks are scheduled unless Arcovia requeues it.");
+      addTimeline(job, "research_completed", "Saved job already satisfies the new deep-search policy. No further sourcing checks are scheduled unless Arcovia requeues it.");
     }
     upsertJob(job);
     return;

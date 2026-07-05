@@ -1,4 +1,4 @@
-# Arcovia AI Sourcing Automation
+# Arcovia Sourcing Automation
 
 This service starts a sourcing job when the **R250 Product Sourcing Deposit** order is paid.
 
@@ -14,7 +14,7 @@ Shopify Flow is the easiest for this store because Arcovia is on Shopify Advance
 - Creates a sourcing job immediately after a paid deposit.
 - Extracts the product request from order notes, line-item properties, or Flow payload fields.
 - If the customer did not provide product details, sends them a unique intake form link.
-- Runs AI deep web research with supplier trust checks.
+- Runs deep web research with supplier trust checks.
 - Runs 3 deep sourcing searches total for every paid request before final outcome.
 - The first pass is the super-deep search; pass 2 and pass 3 use different search angles and expansion/confirmation checks.
 - If a trusted source is found early, the worker still completes all 3 passes before sending customer options.
@@ -35,7 +35,7 @@ Shopify Flow is the easiest for this store because Arcovia is on Shopify Advance
 - Captures multiple source/product images per option where available. Images are filtered so customer options do not borrow pictures from other suppliers and do not use obvious logos, banners, placeholders, profile pictures, or generic unrelated images.
 - Never buys from a supplier automatically.
 - If all 3 deep searches finish with no trusted source, marks the job `refund_due` and emails Arcovia/customer that no trusted supplier/source was found. The actual payment refund is still a manual Shopify/PayFast action until refund automation is separately tested.
-- Optional local Codex worker mode lets an always-on Windows PC run supplier research through the signed-in Codex CLI instead of the hosted OpenAI API.
+- Optional local worker mode lets an always-on Windows PC run supplier research through the signed-in local CLI instead of the hosted research API.
 
 ## Local setup
 
@@ -79,11 +79,11 @@ Dry-run test:
 node scripts/dry-run-paid-order.js
 ```
 
-The dry-run test intentionally uses a blank customer email and no product brief, so it verifies job creation and status-page handling without sending real email or starting paid AI research.
+The dry-run test intentionally uses a blank customer email and no product brief, so it verifies job creation and status-page handling without sending real email or starting paid research.
 
-## Local Codex worker mode
+## Local worker mode
 
-Use this when the store owner's computer is always on and Codex is signed in with ChatGPT subscription access.
+Use this when the store owner's computer is always on and the local worker is signed in with subscription access.
 
 Hosted backend:
 
@@ -119,13 +119,13 @@ node scripts/local-codex-worker.js --once
 How it works:
 
 1. Shopify paid deposit creates a sourcing job on Render.
-2. Render does not call OpenAI when local worker mode is enabled.
+2. Render does not call the hosted research API when local worker mode is enabled.
 3. The local worker claims the next ready job from `/local-worker/claim`.
 4. The worker runs `codex exec` locally with a structured JSON schema.
 5. The worker posts the supplier report back to `/local-worker/report`.
 6. Arcovia reviews suppliers in `/review` and manually chooses one.
 
-Keep the PC awake, online, and signed in to Codex. If Codex logs out or the PC sleeps, new research jobs wait until the worker is running again.
+Keep the PC awake, online, and signed in. If the local session logs out or the PC sleeps, new research jobs wait until the worker is running again.
 
 ## Shopify Flow setup
 
@@ -134,7 +134,7 @@ Create a Shopify Flow workflow:
 1. Trigger: **Order paid**
 2. Condition: order contains the deposit product/SKU `ARC-DEPOSIT-250`
 3. Action: **Add order tags**
-   - `arcovia-ai-sourcing`
+   - `arcovia-sourcing`
    - `sourcing-started`
 4. Action: **Send HTTP request**
    - Method: `POST`
@@ -167,13 +167,13 @@ If the Flow body Liquid fields need adjustment in the Shopify editor, keep the s
 
 ### Recommended Shopify Admin fallback
 
-Shopify Flow does not always pass every line-item custom field in the HTTP action payload. To make paid-deposit automation reliable, configure these Render environment variables so the backend can fetch the full paid order from Shopify before deciding whether to start AI research:
+Shopify Flow does not always pass every line-item custom field in the HTTP action payload. To make paid-deposit automation reliable, configure these Render environment variables so the backend can fetch the full paid order from Shopify before deciding whether to start supplier research:
 
 - `SHOPIFY_STORE_DOMAIN` — your `.myshopify.com` domain, for example `kk09qy-xz.myshopify.com`
 - `SHOPIFY_ADMIN_ACCESS_TOKEN` — a custom app Admin API token with `read_orders`
 - `SHOPIFY_ADMIN_API_VERSION` — defaults to `2026-04`
 
-With these set, the webhook can receive only the order ID/name from Flow, fetch the order's line-item custom attributes, extract the product brief, and queue AI supplier research immediately.
+With these set, the webhook can receive only the order ID/name from Flow, fetch the order's line-item custom attributes, extract the product brief, and queue supplier research immediately.
 
 Optional diagnostics:
 
@@ -192,12 +192,12 @@ Invoke-RestMethod `
 
 Important status fields:
 
-- `researchRunning: true` means the AI is actively doing a sourcing check right now.
+- `researchRunning: true` means sourcing research is actively running right now.
 - `researchAttemptCount: 1` through `3` shows how many deep checks have completed or started.
 - `nextResearchAt` shows when the next automatic check will run.
 - `deepResearchSearchContextSize`, `deepResearchReasoningEffort`, and `deepResearchMaxOutputTokens` are exposed on `/health` so you can confirm Render is using the safe OpenAI settings.
 - `supplierCount` is the number of trusted sources that survived filtering.
-- `candidateSourceCount` is the number of sources the AI found before trust filtering.
+- `candidateSourceCount` is the number of sources found before trust filtering.
 - `rejectedSourceCount` is the number removed because they looked unsafe, untrusted, or had poor evidence.
 - `refundStatus: manual_refund_required` means the refundable-deposit rule has been triggered and the refund must be processed manually.
 
@@ -219,7 +219,7 @@ Services ask for the service type, location, timing, problem/event details, prov
 
 ## Safety rules
 
-- The AI can shortlist suppliers, but Arcovia must approve the supplier before quoting the customer.
+- The system can shortlist suppliers, but Arcovia must approve the supplier before quoting the customer.
 - Do not tell customers a supplier is “safe” unless the report contains clear supporting evidence.
 - Do not accuse a supplier of fraud in customer emails. Use internal wording like “red flags found” and cite sources internally.
 - Do not auto-purchase from suppliers.

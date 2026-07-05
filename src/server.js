@@ -1,7 +1,7 @@
 import http from "node:http";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { config } from "./config.js";
-import { sendEmail } from "./email.js";
+import { sendCustomerEmail, sendEmail, sendSensitiveAdminEmailForJob } from "./email.js";
 import { isResearchRunning, queueDueResearchAttempts, queueResearch, researchPolicySummary } from "./research.js";
 import { handleLocalWorkerClaim, handleLocalWorkerReport, localWorkerHealthFeatures } from "./local-worker.js";
 import { fetchShopifyOrderDetails } from "./shopify.js";
@@ -16,7 +16,7 @@ const server = http.createServer(async (req, res) => {
       const researchPolicy = researchPolicySummary();
       return json(res, 200, {
         ok: true,
-        service: "arcovia-ai-sourcing",
+        service: "arcovia-sourcing",
         jobs: readJobs().length,
         features: {
           shopifyOrderEnrichment: true,
@@ -126,7 +126,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(config.port, () => {
-  console.log(`Arcovia AI sourcing server listening on http://localhost:${config.port}`);
+  console.log(`Arcovia sourcing server listening on http://localhost:${config.port}`);
 });
 
 setInterval(() => {
@@ -214,7 +214,7 @@ async function createJobFromOrderPayload(payload, source, options = {}) {
   if (productRequest) {
     addTimeline(job, "brief_captured", "Product brief captured from the paid Shopify order.");
     if (config.localCodexWorkerEnabled) {
-      addTimeline(job, "local_worker_waiting", "Local Codex worker mode is enabled. Waiting for the always-on PC worker to claim this research job.");
+      addTimeline(job, "local_worker_waiting", "Sourcing worker mode is enabled. Waiting for the always-on PC worker to claim this research job.");
     }
   } else {
     addTimeline(job, "awaiting_brief", "Paid order received, but no product brief was attached to the order.");
@@ -222,7 +222,7 @@ async function createJobFromOrderPayload(payload, source, options = {}) {
   upsertJob(job);
 
   if (!options.skipDepositEmail) {
-    await sendEmail({ to: job.customerEmail, ...depositReceived(job) });
+    await sendCustomerEmail({ to: job.customerEmail, ...depositReceived(job) });
   }
 
   if (productRequest && !config.localCodexWorkerEnabled) queueResearch(job.id);
@@ -246,8 +246,8 @@ async function updateExistingJobFromOrder(existing, payload, productRequest, sou
   if (existing.productRequest?.trim() && ["awaiting_brief", "research_failed"].includes(existing.status)) {
     existing.status = "researching";
     addTimeline(existing, "research_requeued", config.localCodexWorkerEnabled
-      ? "Local Codex worker research was queued from the latest paid-order payload."
-      : "AI supplier research was queued from the latest paid-order payload.");
+      ? "Sourcing worker research was queued from the latest paid-order payload."
+      : "Supplier research was queued from the latest paid-order payload.");
     upsertJob(existing);
     if (!config.localCodexWorkerEnabled) queueResearch(existing.id);
     return existing;
@@ -258,8 +258,8 @@ async function updateExistingJobFromOrder(existing, payload, productRequest, sou
     existing.currentResearchAttempt = null;
     existing.nextResearchAt = null;
     addTimeline(existing, "research_requeued", config.localCodexWorkerEnabled
-      ? "Local Codex worker research was force-queued from the latest paid-order payload."
-      : "AI supplier research was force-queued from the latest paid-order payload.");
+      ? "Sourcing worker research was force-queued from the latest paid-order payload."
+      : "Supplier research was force-queued from the latest paid-order payload.");
     upsertJob(existing);
     if (!config.localCodexWorkerEnabled) queueResearch(existing.id);
     return existing;
@@ -414,7 +414,7 @@ function handleMonitorPage(_req, res, url) {
   return html(res, 200, `<!doctype html>
 <html>
 <head>
-  <title>Arcovia AI monitor</title>
+  <title>Arcovia sourcing monitor</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="refresh" content="30" />
   <style>
@@ -452,14 +452,14 @@ function handleMonitorPage(_req, res, url) {
 </head>
 <body>
   <header>
-    <h1>Arcovia AI monitor</h1>
+    <h1>Arcovia sourcing monitor</h1>
     <div class="muted">Auto-refreshes every 30 seconds. Last loaded: ${escapeHtml(formatEventTime(new Date().toISOString()))}</div>
     <div class="toolbar">
       <a class="button" href="${escapeHtml(refreshUrl)}">Refresh now</a>
     </div>
   </header>
   <main class="monitor-shell">
-    ${cards || `<div class="card"><h2>No sourcing jobs yet</h2><p class="muted">When a paid Shopify deposit triggers the AI, it will appear here.</p></div>`}
+    ${cards || `<div class="card"><h2>No sourcing jobs yet</h2><p class="muted">When a paid Shopify deposit starts sourcing, it will appear here.</p></div>`}
   </main>
 </body>
 </html>`);
@@ -575,7 +575,7 @@ function handleReviewAllPage(_req, res) {
     <h1>Supplier review</h1>
     <div class="muted">No password. New orders appear here automatically. Do not share this internal page outside Arcovia.</div>
   </header>
-  <main class="monitor-shell">${cards || `<div class="card"><h2>No sourcing jobs yet</h2><p class="muted">When new paid deposit orders reach the AI, they will appear here.</p></div>`}</main>
+  <main class="monitor-shell">${cards || `<div class="card"><h2>No sourcing jobs yet</h2><p class="muted">When new paid deposit orders reach the sourcing system, they will appear here.</p></div>`}</main>
 </body>
 </html>`);
 }
@@ -727,7 +727,7 @@ async function handleCustomerOptionSelect(req, res) {
       supplierUrl: supplier.url || ""
     });
     upsertJob(job);
-    await sendEmail({ to: config.adminEmail, ...customerOptionSelectedAdmin(job) });
+    await sendSensitiveAdminEmailForJob(job, customerOptionSelectedAdmin(job));
   }
 
   return redirect(res, `/options/${encodeURIComponent(token)}?selected=1`);
@@ -814,7 +814,7 @@ function handleMonitorLitePage(_req, res) {
   return html(res, 200, `<!doctype html>
 <html>
 <head>
-  <title>Arcovia AI lite monitor</title>
+  <title>Arcovia sourcing lite monitor</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="refresh" content="30" />
   <style>
@@ -845,16 +845,16 @@ function handleMonitorLitePage(_req, res) {
 </head>
 <body>
   <header>
-    <h1>Arcovia AI monitor</h1>
+    <h1>Arcovia sourcing monitor</h1>
     <div class="muted">Safe phone view. No customer details or supplier links shown. Auto-refreshes every 30 seconds.</div>
     <div class="banner">
-      <div class="stat"><b>${escapeHtml(activeCount)}</b><span>AI running</span></div>
+      <div class="stat"><b>${escapeHtml(activeCount)}</b><span>sourcing running</span></div>
       <div class="stat"><b>${escapeHtml(reviewCount)}</b><span>needs review</span></div>
       <div class="stat"><b>${escapeHtml(refundCount)}</b><span>refund due</span></div>
     </div>
   </header>
   <main class="grid">
-    ${cards || `<div class="card"><h2>No sourcing jobs yet</h2><p class="muted">When a paid Shopify deposit triggers the AI, it will appear here.</p></div>`}
+    ${cards || `<div class="card"><h2>No sourcing jobs yet</h2><p class="muted">When a paid Shopify deposit starts sourcing, it will appear here.</p></div>`}
   </main>
 </body>
 </html>`);
@@ -949,7 +949,7 @@ function monitorLoginHtml() {
   return `<!doctype html>
 <html>
 <head>
-  <title>Arcovia AI monitor login</title>
+  <title>Arcovia sourcing monitor login</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     body { font-family: Arial, sans-serif; background:#080406; color:#fff; margin:0; padding:22px; }
@@ -962,7 +962,7 @@ function monitorLoginHtml() {
 </head>
 <body>
   <main>
-    <h1>Arcovia AI monitor</h1>
+    <h1>Arcovia sourcing monitor</h1>
     <p class="muted">Enter the private monitor key, or use the saved phone link.</p>
     <form method="GET" action="/monitor">
       <input name="key" placeholder="Private monitor key" autocomplete="off" />
@@ -989,18 +989,18 @@ function monitorJobCard(job, auth = {}) {
   const selectedHtml = selected ? selectedSourceBox(selected, job.selectedSupplier) : "";
   const customerSelectedHtml = job.customerSelectedOption ? customerSelectedOptionBox(job.customerSelectedOption, job) : "";
   const missingDetails = (job.missingCustomerDetails || []).slice(0, 5).map((detail) => `<li>${escapeHtml(detail)}</li>`).join("");
-  const nextLine = job.nextResearchAt ? `<p class="muted">Next AI check: ${escapeHtml(formatEventTime(job.nextResearchAt))}</p>` : "";
+  const nextLine = job.nextResearchAt ? `<p class="muted">Next sourcing check: ${escapeHtml(formatEventTime(job.nextResearchAt))}</p>` : "";
   const completedLine = job.researchCompletedAt ? `<p class="muted">Research completed: ${escapeHtml(formatEventTime(job.researchCompletedAt))}</p>` : "";
   const missingBriefLine = !job.productRequestPresent && job.briefLink
-    ? `<p><strong>No product details yet.</strong> The AI cannot search this order until the item details are added.</p><p><a class="button" href="${escapeHtml(job.briefLink)}">Add product details</a></p>`
+    ? `<p><strong>No product details yet.</strong> The sourcing process cannot search this order until the item details are added.</p><p><a class="button" href="${escapeHtml(job.briefLink)}">Add product details</a></p>`
     : "";
   const runningLine = job.researchRunning
-    ? `<p><strong>AI is working right now.</strong> Keep this page open; it refreshes automatically.</p>`
-    : `<p class="muted">AI is not currently running for this order.</p>`;
+    ? `<p><strong>Sourcing research is running right now.</strong> Keep this page open; it refreshes automatically.</p>`
+    : `<p class="muted">Sourcing research is not currently running for this order.</p>`;
   const sourceSections = [
     sourceSection({
       title: "Approved suppliers",
-      subtitle: "Trusted or usable sources that passed the AI's initial checks.",
+      subtitle: "Trusted or usable sources that passed the initial sourcing checks.",
       items: job.suppliers || [],
       group: "suppliers",
       cardType: "approved",
@@ -1230,7 +1230,7 @@ function shippingAgentSection(agents) {
   </article>`).join("");
   return `<details class="source-section">
     <summary>
-      <span>Shipping agents<span class="section-subtitle">Forwarders and shipping options the AI found for international orders.</span></span>
+      <span>Shipping agents<span class="section-subtitle">Forwarders and shipping options found for international orders.</span></span>
       <span class="count-badge">${escapeHtml((agents || []).length)}</span>
     </summary>
     ${cards ? `<div class="source-grid">${cards}</div>` : `<div class="empty-section">No shipping agents captured yet.</div>`}
@@ -1382,7 +1382,7 @@ function isSafeImageUrl(value) {
 
 function monitorLiteJobCard(job) {
   const maxAttempts = displayMaxResearchAttempts(job);
-  const nextLine = job.nextResearchAt ? `<p class="muted">Next AI check: ${escapeHtml(formatEventTime(job.nextResearchAt))}</p>` : "";
+  const nextLine = job.nextResearchAt ? `<p class="muted">Next sourcing check: ${escapeHtml(formatEventTime(job.nextResearchAt))}</p>` : "";
   const completedLine = job.researchCompletedAt ? `<p class="muted">Completed: ${escapeHtml(formatEventTime(job.researchCompletedAt))}</p>` : "";
   const reviewButton = job.reviewLink
     ? `<p><a class="button" href="${escapeHtml(job.reviewLink)}">Review suppliers</a></p>`
@@ -1391,8 +1391,8 @@ function monitorLiteJobCard(job) {
     ? `<p><strong>No product details yet.</strong></p><p><a class="button" href="${escapeHtml(job.briefLink)}">Add product details</a></p>`
     : "";
   const runningLine = job.researchRunning
-    ? `<p><strong>AI is working right now.</strong></p>`
-    : `<p class="muted">AI is not currently running for this order.</p>`;
+    ? `<p><strong>Sourcing research is running right now.</strong></p>`
+    : `<p class="muted">Sourcing research is not currently running for this order.</p>`;
 
   return `<section class="card">
     <h2>${escapeHtml(job.orderName || "Latest order")}</h2>
@@ -1935,7 +1935,7 @@ async function handleBriefSubmit(req, res, token) {
   job.nextResearchAt = null;
   addTimeline(job, "brief_received", "Customer submitted product sourcing brief.");
   if (config.localCodexWorkerEnabled) {
-    addTimeline(job, "local_worker_waiting", "Local Codex worker mode is enabled. Waiting for the always-on PC worker to claim this research job.");
+    addTimeline(job, "local_worker_waiting", "Sourcing worker mode is enabled. Waiting for the always-on PC worker to claim this research job.");
   }
   upsertJob(job);
 
@@ -1947,10 +1947,10 @@ async function handleStatusPage(_req, res, token) {
   const job = getJob(token);
   if (!job) return html(res, 404, "<h1>Status link not found</h1>");
   const timeline = (job.timeline || []).slice().reverse().map((event) => {
-    return `<li><strong>${escapeHtml(formatEventTime(event.at))}</strong><br>${escapeHtml(event.message)}</li>`;
+    return `<li><strong>${escapeHtml(formatEventTime(event.at))}</strong><br>${escapeHtml(customerTimelineMessage(event, job))}</li>`;
   }).join("");
-  const researchSummary = job.research?.summary
-    ? `<section><h2>Internal research summary</h2><p>${escapeHtml(job.research.summary)}</p><p class="muted">Arcovia reviews supplier evidence before any supplier details or quote is sent to you.</p></section>`
+  const researchSummary = job.researchCompletedAt
+    ? `<section><h2>Research review</h2><p class="muted">Arcovia is reviewing the sourcing results before any final quote or next payment step is confirmed.</p></section>`
     : "";
   const progress = researchProgressHtml(job);
 
@@ -1976,7 +1976,7 @@ async function handleStatusPage(_req, res, token) {
     <div class="badge">${escapeHtml(statusLabel(job.status))}</div>
     <p class="muted">Order: ${escapeHtml(job.orderName)}<br>Created: ${escapeHtml(formatEventTime(job.createdAt))}<br>Sourcing window ends: ${escapeHtml(formatEventTime(job.sourcingWindowEndsAt))}</p>
     ${progress}
-    ${job.status === "awaiting_brief" ? `<p><a href="${escapeHtml(briefLinkForStatus(job))}">Complete your product brief</a> so the AI can start searching.</p>` : ""}
+    ${job.status === "awaiting_brief" ? `<p><a href="${escapeHtml(briefLinkForStatus(job))}">Complete your product brief</a> so the sourcing process can start.</p>` : ""}
     ${researchSummary}
     <h2>Timeline</h2>
     <ul>${timeline || "<li>No timeline entries yet.</li>"}</ul>
@@ -2002,11 +2002,11 @@ async function sendDueUpdates() {
       addTimeline(job, "refund_due", job.refundReason);
       upsertJob(job);
       await sendEmail({ to: config.adminEmail, ...adminRefundDue(job) });
-      await sendEmail({ to: job.customerEmail, ...customerRefundDue(job) });
+      await sendCustomerEmail({ to: job.customerEmail, ...customerRefundDue(job) });
       continue;
     }
 
-    await sendEmail({ to: job.customerEmail, ...stageUpdate(job) });
+    await sendCustomerEmail({ to: job.customerEmail, ...stageUpdate(job) });
     job.nextUpdateAt = addHours(now, config.updateIntervalHours).toISOString();
     addTimeline(job, "customer_update_sent", `Customer update sent for status ${job.status}.`);
     upsertJob(job);
@@ -2078,6 +2078,42 @@ function scriptJson(value) {
 
 function briefLinkForStatus(job) {
   return `${config.publicBaseUrl.replace(/\/$/, "")}/brief/${job.publicToken}`;
+}
+
+function customerTimelineMessage(event, job = {}) {
+  const maxAttempts = displayMaxResearchAttempts(job);
+  const labels = {
+    job_created: "Your sourcing request was received.",
+    brief_captured: "Your product details were received.",
+    brief_received: "Your product details were received.",
+    awaiting_brief: "We are waiting for your product details before the sourcing process can start.",
+    local_worker_waiting: "Your request is queued for sourcing research.",
+    local_worker_claimed: "A sourcing research check started.",
+    research_attempt_started: "A sourcing research check started.",
+    local_worker_report_received: "A sourcing research check was completed.",
+    research_attempt_completed: "A sourcing research check was completed.",
+    local_worker_more_scheduled: `Another sourcing research check is scheduled. Arcovia completes ${maxAttempts} deep checks before sending final options or a no-supplier update.`,
+    research_more_scheduled: `Another sourcing research check is scheduled. Arcovia completes ${maxAttempts} deep checks before sending final options or a no-supplier update.`,
+    local_worker_retry_scheduled: "No trusted supplier has passed checks yet. Another sourcing check is scheduled.",
+    research_retry_scheduled: "No trusted supplier has passed checks yet. Another sourcing check is scheduled.",
+    research_schedule_shortened: "The next sourcing check was moved forward.",
+    research_completed: "The sourcing checks are complete and the options are being reviewed.",
+    customer_options_sent: "Your private options link was sent by email.",
+    customer_options_email_failed: "The options email could not be sent automatically. Arcovia is checking it.",
+    customer_update_sent: "A sourcing update was sent by email.",
+    customer_option_selected: "Your chosen option was received.",
+    supplier_selected: "Arcovia selected an option for follow-up.",
+    refund_due: "No trusted supplier was found after the full sourcing checks. Your refundable deposit is marked for refund processing.",
+    research_failed: "The sourcing process needs attention. Arcovia is checking it."
+  };
+
+  if (labels[event?.type]) return labels[event.type];
+
+  return String(event?.message || "Sourcing update recorded.")
+    .replace(/\bAI\b/gi, "sourcing")
+    .replace(/Local Codex worker/gi, "Sourcing worker")
+    .replace(/Local Codex/gi, "Sourcing worker")
+    .replace(/https?:\/\/[^\s)>\]]+/gi, "[private link]");
 }
 
 function researchProgressHtml(job) {

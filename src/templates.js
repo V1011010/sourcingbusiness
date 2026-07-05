@@ -18,7 +18,7 @@ export function depositReceived(job) {
       subject: `Arcovia sourcing started for ${job.orderName}`,
       text: `Hi ${job.customerName || "there"},
 
-We received your R250 sourcing deposit and the AI sourcing process has started.
+We received your R250 sourcing deposit and the sourcing process has started.
 
 Current stage: searching for possible suppliers and product matches.
 
@@ -39,7 +39,7 @@ Arcovia`
 
 We received your R250 sourcing deposit for ${job.orderName}.
 
-Before the AI can start the supplier search, please send the product details here:
+Before the sourcing process can start, please send the product details here:
 ${briefLink(job)}
 
 You can track the status here:
@@ -249,8 +249,8 @@ Arcovia`
 
 export function researchFailure(job, errorMessage) {
   return {
-    subject: `Arcovia AI research failed: ${job.orderName}`,
-    text: `Arcovia AI supplier research failed.
+    subject: `Arcovia supplier research needs attention: ${job.orderName}`,
+    text: `Arcovia supplier research needs attention.
 
 Order: ${job.orderName}
 Customer: ${job.customerName || "n/a"} <${job.customerEmail || "n/a"}>
@@ -262,7 +262,7 @@ ${job.productRequest || "No request captured"}
 Failure:
 ${errorMessage}
 
-Fix the API/config issue, then retry the paid-order webhook or ask Codex to reprocess the order.`
+Fix the research/config issue, then retry the paid-order webhook or reprocess the order.`
   };
 }
 

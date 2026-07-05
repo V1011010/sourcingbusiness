@@ -55,6 +55,39 @@ export async function sendEmail({ to, subject, text }) {
   return { ok: true, dryRun: false };
 }
 
+export async function sendCustomerEmail({ to, subject, text }) {
+  const unsafeReason = getUnsafeCustomerEmailReason({ subject, text });
+  if (unsafeReason) {
+    appendOutbox({
+      to,
+      from: config.fromEmail,
+      replyTo: config.replyToEmail,
+      subject,
+      blocked: true,
+      reason: unsafeReason
+    });
+    return { ok: false, dryRun: false, blocked: true, reason: unsafeReason };
+  }
+
+  return sendEmail({ to, subject, text });
+}
+
+export async function sendSensitiveAdminEmailForJob(job, template) {
+  if (sameEmail(config.adminEmail, job?.customerEmail)) {
+    appendOutbox({
+      to: config.adminEmail,
+      from: config.fromEmail,
+      replyTo: config.replyToEmail,
+      subject: template?.subject || "Arcovia internal supplier report",
+      skipped: true,
+      reason: "admin_email_matches_customer_email_sensitive_report"
+    });
+    return { ok: true, skipped: true, reason: "admin_email_matches_customer_email_sensitive_report" };
+  }
+
+  return sendEmail({ to: config.adminEmail, ...template });
+}
+
 function sendResendEmail({ from, to, subject, text }) {
   return fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -75,4 +108,46 @@ function sendResendEmail({ from, to, subject, text }) {
 function shouldRetryWithResendDefaultSender(detail) {
   const message = String(detail || "").toLowerCase();
   return message.includes("domain is not verified") || message.includes("verify your domain");
+}
+
+function getUnsafeCustomerEmailReason({ subject, text }) {
+  const combined = `${subject || ""}\n${text || ""}`;
+  const sensitivePatterns = [
+    { pattern: /\bAI\b/i, reason: "customer_email_mentions_ai" },
+    { pattern: /internal supplier details/i, reason: "customer_email_contains_internal_supplier_details" },
+    { pattern: /supplier\/source:/i, reason: "customer_email_contains_supplier_source_mapping" },
+    { pattern: /\bURL:/i, reason: "customer_email_contains_raw_url_field" },
+    { pattern: /\bEvidence:/i, reason: "customer_email_contains_evidence_field" },
+    { pattern: /\bRaw report:/i, reason: "customer_email_contains_raw_report" },
+    { pattern: /\bRed flags:/i, reason: "customer_email_contains_red_flags" }
+  ];
+
+  for (const { pattern, reason } of sensitivePatterns) {
+    if (pattern.test(combined)) return reason;
+  }
+
+  const allowedBase = config.publicBaseUrl.replace(/\/$/, "");
+  const urls = combined.match(/https?:\/\/[^\s)>\]]+/gi) || [];
+  const blockedUrl = urls.find((url) => !isAllowedCustomerUrl(url, allowedBase));
+  if (blockedUrl) return "customer_email_contains_unapproved_external_link";
+
+  return "";
+}
+
+function isAllowedCustomerUrl(url, allowedBase) {
+  return [
+    `${allowedBase}/brief/`,
+    `${allowedBase}/status/`,
+    `${allowedBase}/options/`
+  ].some((prefix) => String(url || "").startsWith(prefix));
+}
+
+function sameEmail(left, right) {
+  return normalizeEmail(left) && normalizeEmail(left) === normalizeEmail(right);
+}
+
+function normalizeEmail(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  const bracketMatch = raw.match(/<([^>]+)>/);
+  return (bracketMatch ? bracketMatch[1] : raw).trim();
 }
