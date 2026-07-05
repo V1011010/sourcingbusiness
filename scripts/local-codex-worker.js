@@ -12,6 +12,7 @@ const baseUrl = (process.env.PUBLIC_BASE_URL || "https://sourcingbusiness.onrend
 const workerSecret = process.env.ARCOVIA_LOCAL_WORKER_SECRET || process.env.ARCOVIA_FLOW_SECRET || "";
 const pollSeconds = Math.max(15, Number(process.env.LOCAL_CODEX_WORKER_POLL_SECONDS || 60));
 const codexBin = process.env.CODEX_BIN || findCodexBin();
+const workerEnv = buildWorkerEnv();
 const schemaPath = resolve("scripts/codex-sourcing-schema.json");
 const runtimeDir = resolve("data/local-codex-worker");
 
@@ -92,6 +93,7 @@ function runCodex(prompt, outputPath) {
       outputPath
     ], {
       cwd: process.cwd(),
+      env: workerEnv,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true
     });
@@ -197,6 +199,31 @@ function findCodexBin() {
   ];
 
   return candidates.find((candidate) => candidate && (candidate === "codex" || existsSync(candidate))) || "codex";
+}
+
+function buildWorkerEnv() {
+  const env = { ...process.env };
+  const gitDir = findGitDir();
+  if (gitDir) {
+    const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path") || "PATH";
+    const currentPath = env[pathKey] || "";
+    const parts = currentPath.split(";").filter(Boolean);
+    if (!parts.some((part) => part.toLowerCase() === gitDir.toLowerCase())) {
+      env[pathKey] = [gitDir, currentPath].filter(Boolean).join(";");
+    }
+  }
+  return env;
+}
+
+function findGitDir() {
+  const candidates = [
+    "C:\\Program Files\\Git\\cmd",
+    "C:\\Program Files\\Git\\bin",
+    process.env.LOCALAPPDATA ? resolve(process.env.LOCALAPPDATA, "GitHubDesktop/app-3.6.1/resources/app/git/cmd") : "",
+    process.env.LOCALAPPDATA ? resolve(process.env.LOCALAPPDATA, "GitHubDesktop/app-3.6.1/resources/app/git/bin") : ""
+  ];
+
+  return candidates.find((candidate) => candidate && existsSync(resolve(candidate, "git.exe"))) || "";
 }
 
 function sleep(ms) {
