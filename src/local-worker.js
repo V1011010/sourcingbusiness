@@ -23,6 +23,14 @@ export async function handleLocalWorkerClaim(req, res) {
 
   const attemptNumber = Number(job.researchAttemptCount || 0) + 1;
   const policy = researchPolicySummary();
+  if (attemptNumber > policy.maxTotalAttempts || hasCompletedPolicy(job)) {
+    settleCompletedPolicyJob(job, policy);
+    return json(res, 200, {
+      ok: true,
+      claimed: false,
+      message: "Job already satisfies the Arcovia research policy. No extra local worker check is needed."
+    });
+  }
   const now = new Date();
   const leaseUntil = addMinutes(now, localWorkerLeaseMinutes()).toISOString();
 
@@ -78,6 +86,18 @@ export async function handleLocalWorkerReport(req, res) {
   const workerId = textValue(body.worker_id);
   const attemptNumber = Number(body.attempt || job.localWorker?.attemptNumber || Number(job.researchAttemptCount || 0) + 1);
   const policy = researchPolicySummary();
+
+  if (attemptNumber > policy.maxTotalAttempts) {
+    job.currentResearchAttempt = null;
+    job.localWorker = null;
+    settleCompletedPolicyJob(job, policy);
+    return json(res, 200, {
+      ok: true,
+      status: job.status,
+      ignored: true,
+      reason: "attempt_exceeds_research_policy"
+    });
+  }
 
   if (body.error) {
     const safeError = safeWorkerError(body.error);
@@ -221,6 +241,7 @@ export function localWorkerHealthFeatures() {
     localCodexWorkerLeaseMinutes: localWorkerLeaseMinutes(),
     localCodexWorkerTrustScoreNormalization: "accepts_0_to_1_or_0_to_100",
     silentLocalWorkerReportReplay: true,
+    localWorkerCompletedJobClaimGuard: true,
     ...imageEnrichmentHealthFeatures()
   };
 }
@@ -232,8 +253,15 @@ function findClaimableJob() {
       if (!["researching", "human_review", "research_failed"].includes(job.status)) return false;
       if (job.selectedSupplier) return false;
       if (!job.productRequest?.trim()) return false;
+      if (hasCompletedPolicy(job)) {
+        settleCompletedPolicyJob(job);
+        return false;
+      }
+      if (Number(job.researchAttemptCount || 0) >= researchPolicySummary().maxTotalAttempts) {
+        settleCompletedPolicyJob(job);
+        return false;
+      }
       if (job.localWorker?.leaseUntil && new Date(job.localWorker.leaseUntil) > now) return false;
-      if (hasCompletedPolicy(job)) return false;
       if (job.nextResearchAt && new Date(job.nextResearchAt) > now && !isOpenAiQuotaBlocked(job)) return false;
       return true;
     })
@@ -338,9 +366,51 @@ function hasCompletedPolicy(job) {
   const completedAttempts = Number(job.researchAttemptCount || 0);
   const trustedSupplierCount = Number(job.research?.suppliers?.length || 0);
   if (trustedSupplierCount > 0) {
-    return completedAttempts >= firstTrustedAttempt(job, completedAttempts || 1) + policy.confirmationChecksAfterFound;
+    const requiredAttempt = Math.min(
+      firstTrustedAttempt(job, completedAttempts || 1) + policy.confirmationChecksAfterFound,
+      policy.maxTotalAttempts
+    );
+    return completedAttempts >= requiredAttempt;
   }
   return completedAttempts >= policy.noMatchAttemptLimit;
+}
+
+function settleCompletedPolicyJob(job, policy = researchPolicySummary()) {
+  const trustedSupplierCount = Number(job.research?.suppliers?.length || 0);
+  const now = new Date().toISOString();
+
+  job.currentResearchAttempt = null;
+  job.localWorker = null;
+  job.nextResearchAt = null;
+  job.maxResearchAttempts = policy.maxTotalAttempts;
+
+  if (trustedSupplierCount > 0) {
+    const changed = job.status !== "human_review" || !job.researchCompletedAt;
+    job.status = "human_review";
+    job.researchCompletedAt ||= now;
+    job.customerOptionsToken ||= randomUUID();
+    if (changed) {
+      addTimeline(job, "research_completed", "Saved job already satisfies the local Codex research policy. No further worker checks are scheduled unless Arcovia requeues it.", {
+        suppliers: trustedSupplierCount,
+        attempts: job.researchAttemptCount || 0
+      });
+    }
+    upsertJob(job);
+    return;
+  }
+
+  const changed = job.status !== "refund_due" || !job.researchCompletedAt;
+  job.status = "refund_due";
+  job.refundStatus = "manual_refund_required";
+  job.refundReason ||= `No trusted source found after the initial super-deep search and ${policy.noMatchRetries} retry search(es).`;
+  job.nextUpdateAt = null;
+  job.researchCompletedAt ||= now;
+  if (changed) {
+    addTimeline(job, "refund_due", job.refundReason, {
+      attempts: job.researchAttemptCount || 0
+    });
+  }
+  upsertJob(job);
 }
 
 function shouldRunConfirmationSearch(job, attemptNumber, policy) {

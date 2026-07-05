@@ -751,7 +751,11 @@ function hasCompletedResearchPolicy(job) {
   const completedAttempts = Number(job.researchAttemptCount || 0);
   const trustedSupplierCount = Number(job.research?.suppliers?.length || 0);
   if (trustedSupplierCount > 0) {
-    return completedAttempts >= firstTrustedAttempt(job, completedAttempts || 1) + confirmationChecksAfterFound();
+    const requiredAttempt = Math.min(
+      firstTrustedAttempt(job, completedAttempts || 1) + confirmationChecksAfterFound(),
+      maxResearchAttempts()
+    );
+    return completedAttempts >= requiredAttempt;
   }
   return completedAttempts >= noMatchAttemptLimit();
 }
