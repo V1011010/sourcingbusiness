@@ -61,8 +61,12 @@ export const config = {
   localCodexWorkerEnabled: process.env.LOCAL_CODEX_WORKER_ENABLED === undefined
     ? true
     : ["1", "true", "yes", "on"].includes(String(process.env.LOCAL_CODEX_WORKER_ENABLED || "").toLowerCase()),
+  localCodexMultiAgentEnabled: process.env.LOCAL_CODEX_MULTI_AGENT_ENABLED === undefined
+    ? true
+    : ["1", "true", "yes", "on"].includes(String(process.env.LOCAL_CODEX_MULTI_AGENT_ENABLED || "").toLowerCase()),
+  localCodexAgentConcurrency: Math.max(1, Math.min(5, Number(process.env.LOCAL_CODEX_AGENT_CONCURRENCY || 2))),
   localWorkerSecret: process.env.ARCOVIA_LOCAL_WORKER_SECRET || process.env.ARCOVIA_FLOW_SECRET || "",
-  localWorkerLeaseMinutes: Number(process.env.LOCAL_CODEX_WORKER_LEASE_MINUTES || 45),
+  localWorkerLeaseMinutes: Number(process.env.LOCAL_CODEX_WORKER_LEASE_MINUTES || 90),
   depositSkus: (process.env.DEPOSIT_SKU || "ARC-DEPOSIT-250,ARC-SOURCE-250")
     .split(",")
     .map((sku) => sku.trim())

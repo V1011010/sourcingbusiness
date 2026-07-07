@@ -237,6 +237,15 @@ export function localWorkerHealthFeatures() {
     localSourcingWorkerEnabled: config.localCodexWorkerEnabled,
     localSourcingWorkerEndpoints: true,
     localSourcingWorkerLeaseMinutes: localWorkerLeaseMinutes(),
+    localSourcingWorkerMultiAgentEnabled: config.localCodexMultiAgentEnabled,
+    localSourcingWorkerAgentConcurrency: config.localCodexAgentConcurrency,
+    localSourcingWorkerAgentRoles: [
+      "online_retail",
+      "local_physical_services",
+      "manufacturers_wholesale_fabrics",
+      "trust_risk",
+      "shipping_total_cost"
+    ],
     localSourcingWorkerTrustScoreNormalization: "accepts_0_to_1_or_0_to_100",
     silentLocalWorkerReportReplay: true,
     localWorkerCompletedJobClaimGuard: true,

@@ -40,6 +40,7 @@ Shopify Flow is the easiest for this store because Arcovia is on Shopify Advance
 - Blocks live final-payment links until persistent storage is configured, so quote/payment state is not lost on Render restarts.
 - If all 3 deep searches finish with no trusted source, marks the job `refund_due` and emails Arcovia/customer that no trusted supplier/source was found. The actual payment refund is still a manual Shopify/PayFast action until refund automation is separately tested.
 - Optional local worker mode lets an always-on Windows PC run supplier research through the signed-in local CLI instead of the hosted research API.
+- The local worker runs as a multi-agent sourcing team by default: online retail, local physical/services, manufacturers/wholesale/fabrics, trust/risk, and shipping/total-cost agents.
 
 ## Local setup
 
@@ -63,6 +64,8 @@ Fill in `.env`:
 - `OPENAI_WEB_SEARCH_CONTEXT_SIZE` defaults to `high` for the super-deep sourcing pass
 - `RESEARCH_TECHNICAL_RETRY_DELAY_MINUTES` defaults to `15`; technical API/rate-limit errors retry quickly and do not count as one of the sourcing checks
 - `LOCAL_CODEX_WORKER_ENABLED=true` makes the hosted backend wait for the local Codex worker instead of calling OpenAI directly
+- `LOCAL_CODEX_MULTI_AGENT_ENABLED=true` makes each local research pass run multiple focused sourcing agents
+- `LOCAL_CODEX_AGENT_CONCURRENCY=2` controls how many local Codex agents run at once
 - `ARCOVIA_LOCAL_WORKER_SECRET` can be set separately; if blank, the worker uses `ARCOVIA_FLOW_SECRET`
 - `ARCOVIA_DATA_DIR` can point to a persistent storage directory, for example a Render persistent disk mount path
 - `PAYFAST_MERCHANT_ID`, `PAYFAST_MERCHANT_KEY`, and `PAYFAST_PASSPHRASE` enable final balance payments
@@ -111,6 +114,28 @@ Then start the worker from the repo folder:
 node scripts/local-codex-worker.js
 ```
 
+By default, each claimed research job runs these focused local agents and merges their reports before submitting:
+
+1. Online stores and marketplaces.
+2. Local physical stores and service providers.
+3. Manufacturers, wholesalers, factories, and fabrics.
+4. Trust, reviews, complaint, and scam-risk checks.
+5. Shipping, import, duties, and total landed cost.
+
+Control the load on the PC:
+
+```env
+LOCAL_CODEX_MULTI_AGENT_ENABLED=true
+LOCAL_CODEX_AGENT_CONCURRENCY=2
+LOCAL_CODEX_WORKER_LEASE_MINUTES=90
+```
+
+To temporarily use the old single-agent worker:
+
+```powershell
+node scripts/local-codex-worker.js --single-agent
+```
+
 Or double-click:
 
 ```text
@@ -133,6 +158,8 @@ How it works:
 6. Arcovia reviews suppliers in `/review` and manually chooses one.
 
 Keep the PC awake, online, and signed in. If the local session logs out or the PC sleeps, new research jobs wait until the worker is running again.
+
+Customer email delivery is still handled by the backend email system, not by free-form Codex drafting. That is intentional: automatic customer emails must pass the customer-safety guard before sending. Codex/Gmail can be used manually from a Codex session to create or send a reviewed message, but the live automation should use Resend or another real mail API for automatic delivery.
 
 ## Persistent job storage
 

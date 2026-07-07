@@ -75,7 +75,11 @@ services:
         value: "25"
       - key: LOCAL_CODEX_WORKER_ENABLED
         value: "true"
+      - key: LOCAL_CODEX_MULTI_AGENT_ENABLED
+        value: "true"
+      - key: LOCAL_CODEX_AGENT_CONCURRENCY
+        value: "2"
       - key: LOCAL_CODEX_WORKER_LEASE_MINUTES
-        value: "45"
+        value: "90"
       - key: DEPOSIT_SKU
         value: ARC-DEPOSIT-250,ARC-SOURCE-250
