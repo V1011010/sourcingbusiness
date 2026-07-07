@@ -10,7 +10,7 @@ import {
   researchFailure,
   stageUpdate
 } from "./templates.js";
-import { addTimeline, getJob, readJobs, upsertJob } from "./storage.js";
+import { addTimeline, getJob, readJobs, recordEmailAudit, upsertJob } from "./storage.js";
 
 const runningJobs = new Set();
 const REQUIRED_DEEP_RESEARCH_ATTEMPTS = 3;
@@ -74,6 +74,34 @@ export function researchPolicySummary() {
   };
 }
 
+async function sendCustomerEmailForJob(job, templateName, template) {
+  const result = await sendCustomerEmail({ to: job.customerEmail, ...template });
+  recordEmailAudit(job, {
+    templateName,
+    audience: "customer",
+    to: job.customerEmail,
+    subject: template?.subject || "",
+    result
+  });
+  upsertJob(job);
+  return result;
+}
+
+async function sendAdminEmailForJob(job, templateName, template, { sensitive = false } = {}) {
+  const result = sensitive
+    ? await sendSensitiveAdminEmailForJob(job, template)
+    : await sendEmail({ to: config.adminEmail, ...template });
+  recordEmailAudit(job, {
+    templateName,
+    audience: "admin",
+    to: config.adminEmail,
+    subject: template?.subject || "",
+    result
+  });
+  upsertJob(job);
+  return result;
+}
+
 export async function runResearch(jobId) {
   const job = getJob(jobId);
   if (!job) throw new Error(`Job not found: ${jobId}`);
@@ -102,7 +130,7 @@ export async function runResearch(jobId) {
   upsertJob(job);
 
   if (attemptNumber === 1) {
-    await sendCustomerEmail({ to: job.customerEmail, ...stageUpdate(job) });
+    await sendCustomerEmailForJob(job, "stage_update", stageUpdate(job));
   }
 
   const attemptResearch = await enrichResearchImages(await performSupplierResearch(job, attemptNumber, maxAttempts), {
@@ -173,11 +201,12 @@ export async function runResearch(jobId) {
     });
     upsertJob(job);
 
-    await sendSensitiveAdminEmailForJob(job, adminReport(job));
+    await sendAdminEmailForJob(job, "admin_research_report", adminReport(job), { sensitive: true });
     if (job.customerEmail && !job.customerOptionsSentAt) {
-      const emailResult = await sendCustomerEmail({ to: job.customerEmail, ...customerOptionsReady(job) });
+      const emailResult = await sendCustomerEmailForJob(job, "customer_options_ready", customerOptionsReady(job));
       if (emailResult.ok) {
         job.customerOptionsSentAt = new Date().toISOString();
+        job.status = "options_sent";
         addTimeline(job, "customer_options_sent", "Anonymized approved-supplier options link sent to customer after research completion.");
       } else {
         addTimeline(job, "customer_options_email_failed", `Customer options email failed: ${emailResult.reason || "unknown email error"}.`);
@@ -202,8 +231,8 @@ export async function runResearch(jobId) {
     });
     upsertJob(job);
 
-    await sendEmail({ to: config.adminEmail, ...adminRefundDue(job) });
-    await sendCustomerEmail({ to: job.customerEmail, ...customerRefundDue(job) });
+    await sendAdminEmailForJob(job, "admin_refund_due", adminRefundDue(job));
+    await sendCustomerEmailForJob(job, "customer_refund_due", customerRefundDue(job));
     return;
   }
 
@@ -251,7 +280,7 @@ async function handleResearchError(jobId, error) {
       maxAttempts
     });
     upsertJob(job);
-    await sendEmail({ to: config.adminEmail, ...researchFailure(job, `${safeMessage}\n\nRetry scheduled for ${formatJohannesburg(nextResearchAt)}.`) });
+    await sendAdminEmailForJob(job, "admin_research_failure_retry", researchFailure(job, `${safeMessage}\n\nRetry scheduled for ${formatJohannesburg(nextResearchAt)}.`));
     return;
   }
 
@@ -260,7 +289,7 @@ async function handleResearchError(jobId, error) {
   job.lastResearchError = safeMessage;
   addTimeline(job, "research_failed", safeMessage, { attempts: originalAttempts, maxAttempts });
   upsertJob(job);
-  await sendEmail({ to: config.adminEmail, ...researchFailure(job, safeMessage) });
+  await sendAdminEmailForJob(job, "admin_research_failure", researchFailure(job, safeMessage));
 }
 
 async function performSupplierResearch(job, attemptNumber, maxAttempts) {

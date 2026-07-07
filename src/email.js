@@ -21,38 +21,13 @@ export async function sendEmail({ to, subject, text }) {
 
   if (!response.ok) {
     const detail = await response.text();
-    if (shouldRetryWithResendDefaultSender(detail)) {
-      const fallbackFrom = "Arcovia <onboarding@resend.dev>";
-      const fallbackResponse = await sendResendEmail({
-        from: fallbackFrom,
-        to,
-        subject,
-        text
-      });
-
-      if (fallbackResponse.ok) {
-        appendOutbox({
-          to,
-          from: fallbackFrom,
-          originalFrom: config.fromEmail,
-          replyTo: config.replyToEmail,
-          subject,
-          fallback: true,
-          reason: "original_from_domain_not_verified"
-        });
-        return { ok: true, dryRun: false, fallback: true };
-      }
-
-      const fallbackDetail = await fallbackResponse.text();
-      appendOutbox({ to, from: fallbackFrom, replyTo: config.replyToEmail, subject, text, failed: true, detail: fallbackDetail, fallback: true });
-      return { ok: false, dryRun: false, reason: fallbackDetail };
-    }
-
     appendOutbox({ to, from: config.fromEmail, replyTo: config.replyToEmail, subject, text, failed: true, detail });
     return { ok: false, dryRun: false, reason: detail };
   }
 
-  return { ok: true, dryRun: false };
+  const detail = await response.text();
+  const parsed = parseJson(detail);
+  return { ok: true, dryRun: false, id: parsed?.id || null };
 }
 
 export async function sendCustomerEmail({ to, subject, text }) {
@@ -105,11 +80,6 @@ function sendResendEmail({ from, to, subject, text }) {
   });
 }
 
-function shouldRetryWithResendDefaultSender(detail) {
-  const message = String(detail || "").toLowerCase();
-  return message.includes("domain is not verified") || message.includes("verify your domain");
-}
-
 function getUnsafeCustomerEmailReason({ subject, text }) {
   const combined = `${subject || ""}\n${text || ""}`;
   const sensitivePatterns = [
@@ -138,7 +108,8 @@ function isAllowedCustomerUrl(url, allowedBase) {
   return [
     `${allowedBase}/brief/`,
     `${allowedBase}/status/`,
-    `${allowedBase}/options/`
+    `${allowedBase}/options/`,
+    `${allowedBase}/quote/`
   ].some((prefix) => String(url || "").startsWith(prefix));
 }
 
@@ -150,4 +121,12 @@ function normalizeEmail(value) {
   const raw = String(value || "").trim().toLowerCase();
   const bracketMatch = raw.match(/<([^>]+)>/);
   return (bracketMatch ? bracketMatch[1] : raw).trim();
+}
+
+function parseJson(value) {
+  try {
+    return JSON.parse(value || "{}");
+  } catch {
+    return null;
+  }
 }

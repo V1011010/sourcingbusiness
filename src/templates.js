@@ -12,6 +12,10 @@ export function customerOptionsLink(job) {
   return `${config.publicBaseUrl.replace(/\/$/, "")}/options/${job.customerOptionsToken}`;
 }
 
+export function quoteLink(job) {
+  return `${config.publicBaseUrl.replace(/\/$/, "")}/quote/${job.finalQuote?.token || ""}`;
+}
+
 export function depositReceived(job) {
   if (job.productRequest?.trim()) {
     return {
@@ -73,6 +77,158 @@ Arcovia`
   };
 }
 
+export function customerChoiceReceived(job) {
+  const optionLabel = job.finalQuote?.optionLabel || job.customerSelectedOption?.optionLabel || "your selected option";
+
+  return {
+    subject: `Arcovia received your option choice: ${job.orderName}`,
+    text: `Hi ${job.customerName || "there"},
+
+We received your choice: ${optionLabel}.
+
+Arcovia is now confirming the live availability, delivery, and final total before sending the payment link. Please do not make the final product payment until you receive the confirmed Arcovia quote link.
+
+Track the status here:
+${statusLink(job)}
+
+Order: ${job.orderName}
+
+Arcovia`
+  };
+}
+
+export function customerQuoteReady(job) {
+  const quote = job.finalQuote || {};
+
+  return {
+    subject: `Your Arcovia final quote is ready: ${job.orderName}`,
+    text: `Hi ${job.customerName || "there"},
+
+Your final quote for ${quote.optionLabel || "your selected option"} is ready.
+
+Confirmed total: ${displayMoney(quote.finalAmountZar)}
+Quote expires: ${formatQuoteExpiry(quote.expiresAt)}
+
+You can review the quote and pay securely here:
+${quoteLink(job)}
+
+Once payment has been confirmed, Arcovia will prepare the order. You will receive another confirmation after the order has been placed.
+
+Order: ${job.orderName}
+
+Arcovia`
+  };
+}
+
+export function customerFinalPaymentReceived(job) {
+  return {
+    subject: `Arcovia received your final payment: ${job.orderName}`,
+    text: `Hi ${job.customerName || "there"},
+
+Your final payment has been confirmed.
+
+Arcovia will now prepare the order. You will receive another confirmation once the item order has been placed.
+
+Track the status here:
+${statusLink(job)}
+
+Order: ${job.orderName}
+
+Arcovia`
+  };
+}
+
+export function customerSupplierOrderPlaced(job) {
+  const order = job.supplierOrder || {};
+  const trackingLine = order.trackingNumber
+    ? `Tracking number: ${order.trackingNumber}`
+    : "Tracking details will be added when available.";
+
+  return {
+    subject: `Arcovia placed your item order: ${job.orderName}`,
+    text: `Hi ${job.customerName || "there"},
+
+Your item order has been placed.
+
+${order.orderReference ? `Order reference: ${order.orderReference}` : ""}
+${order.eta ? `Estimated arrival: ${order.eta}` : ""}
+${trackingLine}
+
+Track the status here:
+${statusLink(job)}
+
+Order: ${job.orderName}
+
+Arcovia`
+  };
+}
+
+export function customerOrderStatusUpdate(job) {
+  const order = job.supplierOrder || {};
+  const status = job.status === "delivered"
+    ? "Your order has been marked as delivered."
+    : "Your order is in transit.";
+
+  return {
+    subject: `Arcovia order update: ${job.orderName}`,
+    text: `Hi ${job.customerName || "there"},
+
+${status}
+
+${order.trackingNumber ? `Tracking number: ${order.trackingNumber}` : ""}
+${order.eta ? `Estimated arrival: ${order.eta}` : ""}
+
+Track the status here:
+${statusLink(job)}
+
+Order: ${job.orderName}
+
+Arcovia`
+  };
+}
+
+export function customerNoOnlinePurchaseAvailable(job) {
+  return {
+    subject: `Arcovia sourcing update for ${job.orderName}`,
+    text: `Hi ${job.customerName || "there"},
+
+Arcovia could not confirm a safe online purchase route for this request.
+
+Your R250 sourcing deposit is marked for refund processing under the refundable-deposit rule. If we found an in-store lead, Arcovia can share the general location or store lead separately, but we cannot complete the online purchase for you.
+
+Track the status here:
+${statusLink(job)}
+
+Order: ${job.orderName}
+
+Arcovia`
+  };
+}
+
+export function adminFinalPaymentReceived(job) {
+  const quote = job.finalQuote || {};
+  const selected = job.customerSelectedOption?.supplier || job.selectedSupplier?.supplier || {};
+
+  return {
+    subject: `Final payment confirmed: ${job.orderName}`,
+    text: `Arcovia final payment confirmed
+
+Order: ${job.orderName}
+Customer: ${job.customerName || "n/a"} <${job.customerEmail || "n/a"}>
+Selected option: ${quote.optionLabel || "n/a"}
+Paid amount: ${displayMoney(quote.finalAmountZar)}
+PayFast payment ID: ${quote.paymentId || "n/a"}
+
+Internal supplier details:
+Supplier/source: ${selected.name || selected.supplier_name || "Unnamed supplier"}
+URL: ${selected.url || "Not provided"}
+Estimated total before quote: ${displayRandTotal(selected)}
+
+Action needed:
+Confirm one final time in the supplier checkout, place the order, then update Arcovia with order reference, tracking, and ETA.`
+  };
+}
+
 export function stageUpdate(job) {
   const status = job.status || "researching";
   const stageMessages = {
@@ -81,8 +237,20 @@ export function stageUpdate(job) {
     vetting: "We have found possible suppliers and are checking authenticity, reviews, complaint history, and social presence.",
     human_review: "Supplier options are under Arcovia review. When the approved shortlist is complete, you will receive a private options link to choose from.",
     supplier_selected: "Arcovia has selected a supplier/source for internal follow-up. We will confirm the final quote and next steps before any purchase is made.",
+    customer_selected_option: "We received your preferred option. Arcovia is confirming live availability and the final total before sending the payment link.",
+    quote_verifying: "Arcovia is confirming live availability, delivery, and the final total for your chosen option.",
     quote_ready: "Your sourcing result is ready. Arcovia will contact you with the quote and next steps.",
+    payment_pending: "Your final quote is ready and payment confirmation is pending.",
+    balance_paid: "Your final payment has been received. Arcovia is preparing the order.",
+    ready_to_order: "Your final payment has been received. Arcovia is preparing the order.",
+    order_placed: "Your item order has been placed. Tracking details will be added when available.",
+    in_transit: "Your item order is in transit.",
+    delivered: "Your item order has been marked as delivered.",
     no_match: "We have not found a trustworthy match yet. If we cannot find one within the sourcing window, the refundable-deposit rule applies.",
+    no_online_purchase_available: "Arcovia could not confirm a safe online purchase route for this request. Your refundable deposit is marked for refund processing.",
+    payment_failed: "The final payment was not confirmed. Please use the quote link again or contact Arcovia.",
+    quote_expired: "The previous quote has expired. Arcovia must re-confirm availability and pricing before payment.",
+    supplier_unavailable: "The selected option is no longer available. Arcovia is reviewing alternatives.",
     refund_due: "We completed all 3 deep research checks and could not find a trusted supplier/source we are comfortable recommending. Your refundable deposit is now marked for refund processing."
   };
   const progressLine = researchProgressLine(job);
@@ -105,6 +273,21 @@ Order: ${job.orderName}
 
 Arcovia`
   };
+}
+
+function displayMoney(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) return "To be confirmed";
+  return `R${amount.toFixed(2)}`;
+}
+
+function formatQuoteExpiry(value) {
+  if (!value) return "Not set";
+  try {
+    return new Date(value).toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg" });
+  } catch {
+    return String(value);
+  }
 }
 
 export function customerOptionSelectedAdmin(job) {

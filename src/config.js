@@ -38,6 +38,16 @@ export const config = {
   adminEmail: process.env.ADMIN_EMAIL || "vutlharingobeni5@gmail.com",
   adminStatusSecret: process.env.ARCOVIA_ADMIN_STATUS_SECRET || "",
   dataDir: process.env.ARCOVIA_DATA_DIR || process.env.DATA_DIR || "data",
+  allowTemporaryPaymentStorage: ["1", "true", "yes", "on"].includes(String(process.env.ARCOVIA_ALLOW_TEMP_PAYMENT_STORAGE || "").toLowerCase()),
+  payfastMerchantId: process.env.PAYFAST_MERCHANT_ID || "",
+  payfastMerchantKey: process.env.PAYFAST_MERCHANT_KEY || "",
+  payfastPassphrase: process.env.PAYFAST_PASSPHRASE || "",
+  payfastSandbox: process.env.PAYFAST_SANDBOX === undefined
+    ? true
+    : ["1", "true", "yes", "on"].includes(String(process.env.PAYFAST_SANDBOX || "").toLowerCase()),
+  payfastProcessUrl: process.env.PAYFAST_PROCESS_URL || "",
+  payfastEmailConfirmation: ["1", "true", "yes", "on"].includes(String(process.env.PAYFAST_EMAIL_CONFIRMATION || "").toLowerCase()),
+  payfastConfirmationEmail: process.env.PAYFAST_CONFIRMATION_EMAIL || process.env.ADMIN_EMAIL || "vutlharingobeni5@gmail.com",
   updateIntervalHours: Number(process.env.UPDATE_INTERVAL_HOURS || 6),
   maxSourcingDays: Number(process.env.MAX_SOURCING_DAYS || 14),
   deepResearchMaxAttempts: Number(process.env.DEEP_RESEARCH_MAX_ATTEMPTS || 3),

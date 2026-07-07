@@ -19,6 +19,10 @@ services:
         value: 2026-04
       - key: ARCOVIA_ADMIN_STATUS_SECRET
         sync: false
+      - key: ARCOVIA_DATA_DIR
+        sync: false
+      - key: ARCOVIA_ALLOW_TEMP_PAYMENT_STORAGE
+        value: "false"
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
@@ -33,7 +37,21 @@ services:
         sync: false
       - key: FROM_EMAIL
         value: Arcovia <updates@arcovia.africa>
+      - key: REPLY_TO_EMAIL
+        value: arcovia.africa@gmail.com
       - key: ADMIN_EMAIL
+        value: vutlharingobeni5@gmail.com
+      - key: PAYFAST_MERCHANT_ID
+        sync: false
+      - key: PAYFAST_MERCHANT_KEY
+        sync: false
+      - key: PAYFAST_PASSPHRASE
+        sync: false
+      - key: PAYFAST_SANDBOX
+        value: "true"
+      - key: PAYFAST_EMAIL_CONFIRMATION
+        value: "false"
+      - key: PAYFAST_CONFIRMATION_EMAIL
         value: vutlharingobeni5@gmail.com
       - key: UPDATE_INTERVAL_HOURS
         value: "6"

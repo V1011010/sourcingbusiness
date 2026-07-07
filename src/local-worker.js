@@ -3,7 +3,7 @@ import { config } from "./config.js";
 import { sendCustomerEmail, sendEmail, sendSensitiveAdminEmailForJob } from "./email.js";
 import { enrichResearchImages, imageEnrichmentHealthFeatures } from "./image-enrichment.js";
 import { adminRefundDue, adminReport, customerOptionsReady, customerRefundDue } from "./templates.js";
-import { addTimeline, getJob, readJobs, upsertJob } from "./storage.js";
+import { addTimeline, getJob, readJobs, recordEmailAudit, upsertJob } from "./storage.js";
 import { researchPolicySummary } from "./research.js";
 
 export async function handleLocalWorkerClaim(req, res) {
@@ -182,12 +182,13 @@ export async function handleLocalWorkerReport(req, res) {
     upsertJob(job);
 
     if (!skipEmails) {
-      await sendSensitiveAdminEmailForJob(job, adminReport(job));
+      await sendAdminEmailForJob(job, "admin_research_report", adminReport(job), { sensitive: true });
     }
     if (!skipEmails && job.customerEmail && !job.customerOptionsSentAt) {
-      const emailResult = await sendCustomerEmail({ to: job.customerEmail, ...customerOptionsReady(job) });
+      const emailResult = await sendCustomerEmailForJob(job, "customer_options_ready", customerOptionsReady(job));
       if (emailResult.ok) {
         job.customerOptionsSentAt = new Date().toISOString();
+        job.status = "options_sent";
         addTimeline(job, "customer_options_sent", "Anonymized approved-supplier options link sent to customer after research completion.");
       } else {
         addTimeline(job, "customer_options_email_failed", `Customer options email failed: ${emailResult.reason || "unknown email error"}.`);
@@ -213,8 +214,8 @@ export async function handleLocalWorkerReport(req, res) {
     upsertJob(job);
 
     if (!skipEmails) {
-      await sendEmail({ to: config.adminEmail, ...adminRefundDue(job) });
-      await sendCustomerEmail({ to: job.customerEmail, ...customerRefundDue(job) });
+      await sendAdminEmailForJob(job, "admin_refund_due", adminRefundDue(job));
+      await sendCustomerEmailForJob(job, "customer_refund_due", customerRefundDue(job));
     }
     return json(res, 200, { ok: true, status: job.status, suppliers: 0 });
   }
@@ -241,6 +242,34 @@ export function localWorkerHealthFeatures() {
     localWorkerCompletedJobClaimGuard: true,
     ...imageEnrichmentHealthFeatures()
   };
+}
+
+async function sendCustomerEmailForJob(job, templateName, template) {
+  const result = await sendCustomerEmail({ to: job.customerEmail, ...template });
+  recordEmailAudit(job, {
+    templateName,
+    audience: "customer",
+    to: job.customerEmail,
+    subject: template?.subject || "",
+    result
+  });
+  upsertJob(job);
+  return result;
+}
+
+async function sendAdminEmailForJob(job, templateName, template, { sensitive = false } = {}) {
+  const result = sensitive
+    ? await sendSensitiveAdminEmailForJob(job, template)
+    : await sendEmail({ to: config.adminEmail, ...template });
+  recordEmailAudit(job, {
+    templateName,
+    audience: "admin",
+    to: config.adminEmail,
+    subject: template?.subject || "",
+    result
+  });
+  upsertJob(job);
+  return result;
 }
 
 function findClaimableJob() {

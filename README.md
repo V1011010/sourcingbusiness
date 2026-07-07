@@ -34,6 +34,10 @@ Shopify Flow is the easiest for this store because Arcovia is on Shopify Advance
 - Sends the internal supplier report to Arcovia for human approval.
 - Captures multiple source/product images per option where available. Images are filtered so customer options do not borrow pictures from other suppliers and do not use obvious logos, banners, placeholders, profile pictures, or generic unrelated images.
 - Never buys from a supplier automatically.
+- Lets the customer choose an anonymized approved option, then moves the job into final-quote verification.
+- Creates a private `/quote/...` page for the final confirmed total and PayFast balance payment.
+- Confirms final payments only through the PayFast notification endpoint, not just the customer return page.
+- Blocks live final-payment links until persistent storage is configured, so quote/payment state is not lost on Render restarts.
 - If all 3 deep searches finish with no trusted source, marks the job `refund_due` and emails Arcovia/customer that no trusted supplier/source was found. The actual payment refund is still a manual Shopify/PayFast action until refund automation is separately tested.
 - Optional local worker mode lets an always-on Windows PC run supplier research through the signed-in local CLI instead of the hosted research API.
 
@@ -61,6 +65,8 @@ Fill in `.env`:
 - `LOCAL_CODEX_WORKER_ENABLED=true` makes the hosted backend wait for the local Codex worker instead of calling OpenAI directly
 - `ARCOVIA_LOCAL_WORKER_SECRET` can be set separately; if blank, the worker uses `ARCOVIA_FLOW_SECRET`
 - `ARCOVIA_DATA_DIR` can point to a persistent storage directory, for example a Render persistent disk mount path
+- `PAYFAST_MERCHANT_ID`, `PAYFAST_MERCHANT_KEY`, and `PAYFAST_PASSPHRASE` enable final balance payments
+- `PAYFAST_SANDBOX=true` keeps quote payments in sandbox while testing
 
 Start:
 
@@ -140,6 +146,22 @@ For Render production use:
 4. Redeploy.
 
 After that, `/health` will show `features.storage.dataDirConfigured: true`.
+
+Final PayFast product-balance payments stay blocked until persistent storage is active, unless `ARCOVIA_ALLOW_TEMP_PAYMENT_STORAGE=true` is set for local sandbox testing. Do not enable that override for real customers.
+
+## Final quote and PayFast balance flow
+
+1. Customer pays the R250 deposit in Shopify.
+2. The sourcing worker completes 3 deep checks.
+3. The customer receives a private options link showing only anonymous approved options.
+4. When the customer chooses an option, the job moves to `quote_verifying`.
+5. Arcovia confirms live availability, delivery, duties/import handling, and final price.
+6. In the monitor/review page, Arcovia enters the final rand amount and sends the final quote link.
+7. The customer pays through PayFast from `/quote/...`.
+8. `/payfast/notify` validates the PayFast signature, payment ID, amount, and payment status before marking the job `ready_to_order`.
+9. Arcovia places the supplier order manually and updates the monitor with order reference, tracking number/link, and ETA.
+
+Customer emails are guarded so they only contain Arcovia links and never include supplier names, supplier URLs, raw evidence, rejected-source details, or the word "AI".
 
 ## Shopify Flow setup
 

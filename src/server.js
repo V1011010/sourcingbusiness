@@ -2,11 +2,12 @@ import http from "node:http";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { config } from "./config.js";
 import { sendCustomerEmail, sendEmail, sendSensitiveAdminEmailForJob } from "./email.js";
+import { amountsMatch, buildPayfastCheckoutFields, formatPayfastAmount, parsePayfastBody, payfastConfigured, payfastProcessUrl, verifyPayfastSignature } from "./payfast.js";
 import { isResearchRunning, queueDueResearchAttempts, queueResearch, researchPolicySummary } from "./research.js";
 import { handleLocalWorkerClaim, handleLocalWorkerReport, localWorkerHealthFeatures } from "./local-worker.js";
 import { fetchShopifyOrderDetails } from "./shopify.js";
-import { adminRefundDue, customerOptionSelectedAdmin, customerRefundDue, depositReceived, stageUpdate } from "./templates.js";
-import { addTimeline, getJob, readJobs, storageHealth, upsertJob } from "./storage.js";
+import { adminFinalPaymentReceived, adminRefundDue, customerChoiceReceived, customerFinalPaymentReceived, customerNoOnlinePurchaseAvailable, customerOptionSelectedAdmin, customerOptionsReady, customerOrderStatusUpdate, customerQuoteReady, customerRefundDue, customerSupplierOrderPlaced, depositReceived, stageUpdate } from "./templates.js";
+import { addTimeline, getJob, readJobs, recordEmailAudit, storageHealth, upsertJob } from "./storage.js";
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -41,8 +42,16 @@ const server = http.createServer(async (req, res) => {
           anonymizedCustomerImageProxy: true,
           multiImageSupplierGalleries: true,
           customerSupplierChoiceCapture: true,
-          resendDefaultSenderFallback: true,
+          resendDefaultSenderFallback: false,
+          resendStrictVerifiedSender: true,
           resendReplyToAddress: Boolean(config.replyToEmail),
+          finalPaymentWorkflow: true,
+          finalPaymentStorageReady: isFinalPaymentStorageReady(),
+          payfastConfigured: payfastConfigured(),
+          payfastSandbox: config.payfastSandbox,
+          payfastProcessUrl: payfastConfigured() ? payfastProcessUrl() : null,
+          quotePages: true,
+          payfastItnEndpoint: true,
           expandedCategoryIntake: true,
           missingBriefFixLinks: true,
           refundDueStatus: true,
@@ -76,6 +85,10 @@ const server = http.createServer(async (req, res) => {
       return handleSelectSupplier(req, res);
     }
 
+    if (req.method === "POST" && url.pathname === "/monitor/quote-action") {
+      return handleQuoteAction(req, res, "monitor");
+    }
+
     if (req.method === "GET" && url.pathname === "/review") {
       return handleReviewAllPage(req, res);
     }
@@ -86,6 +99,26 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/review/select-supplier") {
       return handleReviewSelectSupplier(req, res);
+    }
+
+    if (req.method === "POST" && url.pathname === "/review/quote-action") {
+      return handleQuoteAction(req, res, "review");
+    }
+
+    if (req.method === "GET" && url.pathname?.startsWith("/quote/")) {
+      return handleQuotePage(req, res, decodeURIComponent(url.pathname.split("/").pop() || ""), url);
+    }
+
+    if (req.method === "POST" && url.pathname === "/payfast/notify") {
+      return handlePayfastNotify(req, res);
+    }
+
+    if (req.method === "GET" && url.pathname === "/payfast/return") {
+      return handlePayfastReturn(req, res, url);
+    }
+
+    if (req.method === "GET" && url.pathname === "/payfast/cancel") {
+      return handlePayfastCancel(req, res, url);
     }
 
     if (req.method === "GET" && url.pathname?.startsWith("/options-image/")) {
@@ -223,11 +256,39 @@ async function createJobFromOrderPayload(payload, source, options = {}) {
   upsertJob(job);
 
   if (!options.skipDepositEmail) {
-    await sendCustomerEmail({ to: job.customerEmail, ...depositReceived(job) });
+    await sendCustomerEmailForJob(job, "deposit_received", depositReceived(job));
   }
 
   if (productRequest && !config.localCodexWorkerEnabled) queueResearch(job.id);
   return job;
+}
+
+async function sendCustomerEmailForJob(job, templateName, template) {
+  const result = await sendCustomerEmail({ to: job.customerEmail, ...template });
+  recordEmailAudit(job, {
+    templateName,
+    audience: "customer",
+    to: job.customerEmail,
+    subject: template?.subject || "",
+    result
+  });
+  upsertJob(job);
+  return result;
+}
+
+async function sendAdminEmailForJob(job, templateName, template, { sensitive = false } = {}) {
+  const result = sensitive
+    ? await sendSensitiveAdminEmailForJob(job, template)
+    : await sendEmail({ to: config.adminEmail, ...template });
+  recordEmailAudit(job, {
+    templateName,
+    audience: "admin",
+    to: config.adminEmail,
+    subject: template?.subject || "",
+    result
+  });
+  upsertJob(job);
+  return result;
 }
 
 async function updateExistingJobFromOrder(existing, payload, productRequest, source, options = {}) {
@@ -381,6 +442,17 @@ function monitorPageStyles() {
     .source-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; align-items:center; }
     .source-actions form { margin:0; }
     .source-actions button { cursor:pointer; width:auto; }
+    .quote-admin { border:1px solid #6b1024; background:#10070a; border-radius:18px; padding:14px; margin:14px 0; }
+    .quote-admin form { display:grid; gap:10px; margin:12px 0 0; }
+    .quote-fields { display:grid; gap:10px; }
+    .quote-fields label { display:grid; gap:5px; color:#d8b8c0; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+    .quote-fields input, .quote-fields textarea { width:100%; border-radius:10px; border:1px solid #4b1724; background:#0b0407; color:#fff; padding:10px; font-size:14px; }
+    .quote-actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .email-log { border:1px solid #32101a; background:#0b0407; border-radius:16px; padding:12px; margin:14px 0; }
+    .email-log table { width:100%; border-collapse:collapse; font-size:12px; }
+    .email-log th, .email-log td { text-align:left; border-bottom:1px solid #32101a; padding:7px; vertical-align:top; }
+    .email-ok { color:#6ee7a8; font-weight:800; }
+    .email-fail { color:#ff8fa3; font-weight:800; }
     .button.secondary { background:#1b0a10; border-color:#4b1724; }
     .button.warning { background:#6b3d08; border-color:#b47915; }
     .button.success { background:#165c35; border-color:#2f8f58; }
@@ -394,6 +466,8 @@ function monitorPageStyles() {
       .source-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
       .source-card.wide { grid-column:1 / -1; }
       .source-metrics { grid-template-columns:repeat(4,minmax(0,1fr)); }
+      .quote-fields { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .quote-fields .wide { grid-column:1 / -1; }
     }
     @media (max-width: 560px) {
       .job-head { display:block; }
@@ -469,8 +543,9 @@ function handleMonitorPage(_req, res, url) {
     .card { border:1px solid #6b1024; background:#16080d; border-radius:18px; padding:16px; box-shadow:0 12px 30px rgba(0,0,0,.25); }
     .status { display:inline-block; padding:7px 10px; border-radius:999px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; font-size:12px; }
     .researching { background:#8a5b00; }
-    .human_review, .supplier_selected { background:#165c35; }
-    .refund_due, .research_failed { background:#7a1028; }
+    .human_review, .supplier_selected, .options_sent, .quote_ready, .balance_paid, .ready_to_order, .order_placed, .in_transit, .delivered { background:#165c35; }
+    .refund_due, .research_failed, .payment_failed, .quote_expired, .supplier_unavailable, .no_online_purchase_available { background:#7a1028; }
+    .quote_verifying, .payment_pending, .customer_selected_option { background:#8a5b00; }
     .awaiting_brief { background:#4b5563; }
     .stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:14px 0; }
     .stat { background:#0f0609; border:1px solid #3a101b; border-radius:14px; padding:12px; }
@@ -532,8 +607,9 @@ function handleReviewPage(_req, res, token) {
     .card { border:1px solid #6b1024; background:#16080d; border-radius:18px; padding:16px; box-shadow:0 12px 30px rgba(0,0,0,.25); }
     .status { display:inline-block; padding:7px 10px; border-radius:999px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; font-size:12px; }
     .researching { background:#8a5b00; }
-    .human_review, .supplier_selected { background:#165c35; }
-    .refund_due, .research_failed { background:#7a1028; }
+    .human_review, .supplier_selected, .options_sent, .quote_ready, .balance_paid, .ready_to_order, .order_placed, .in_transit, .delivered { background:#165c35; }
+    .refund_due, .research_failed, .payment_failed, .quote_expired, .supplier_unavailable, .no_online_purchase_available { background:#7a1028; }
+    .quote_verifying, .payment_pending, .customer_selected_option { background:#8a5b00; }
     .awaiting_brief { background:#4b5563; }
     .stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:14px 0; }
     .stat { background:#0f0609; border:1px solid #3a101b; border-radius:14px; padding:12px; }
@@ -590,8 +666,9 @@ function handleReviewAllPage(_req, res) {
     .card { border:1px solid #6b1024; background:#16080d; border-radius:18px; padding:16px; box-shadow:0 12px 30px rgba(0,0,0,.25); }
     .status { display:inline-block; padding:7px 10px; border-radius:999px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; font-size:12px; }
     .researching { background:#8a5b00; }
-    .human_review, .supplier_selected { background:#165c35; }
-    .refund_due, .research_failed { background:#7a1028; }
+    .human_review, .supplier_selected, .options_sent, .quote_ready, .balance_paid, .ready_to_order, .order_placed, .in_transit, .delivered { background:#165c35; }
+    .refund_due, .research_failed, .payment_failed, .quote_expired, .supplier_unavailable, .no_online_purchase_available { background:#7a1028; }
+    .quote_verifying, .payment_pending, .customer_selected_option { background:#8a5b00; }
     .awaiting_brief { background:#4b5563; }
     .stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:14px 0; }
     .stat { background:#0f0609; border:1px solid #3a101b; border-radius:14px; padding:12px; }
@@ -651,6 +728,435 @@ async function handleReviewSelectSupplier(req, res) {
 
   markSupplierSelected(job, supplier, supplierIndex, sourceGroup);
   return redirect(res, `/review/${encodeURIComponent(reviewToken)}`);
+}
+
+async function handleQuoteAction(req, res, mode) {
+  const body = await readBody(req);
+  const form = new URLSearchParams(body);
+  const auth = resolveQuoteActionAuth(form, mode);
+  if (!auth.ok) {
+    return html(res, auth.status || 401, auth.html || "<h1>Not authorized</h1>");
+  }
+
+  const job = auth.job;
+  const action = String(form.get("action") || "");
+
+  if (action === "resend_options") {
+    if (!job.customerEmail) {
+      addTimeline(job, "customer_options_email_failed", "Cannot send customer options email because this job has no customer email address.");
+      upsertJob(job);
+      return redirect(res, auth.redirect);
+    }
+    const result = await sendCustomerEmailForJob(job, "customer_options_ready", customerOptionsReady(job));
+    if (result.ok) {
+      job.customerOptionsSentAt = new Date().toISOString();
+      if (["human_review", "options_sent"].includes(job.status)) job.status = "options_sent";
+      addTimeline(job, "customer_options_sent", "Anonymized approved-supplier options link sent to customer from admin action.");
+    } else {
+      addTimeline(job, "customer_options_email_failed", `Customer options email failed: ${result.reason || "unknown email error"}.`);
+    }
+    upsertJob(job);
+    return redirect(res, auth.redirect);
+  }
+
+  if (action === "no_online_purchase") {
+    job.status = "no_online_purchase_available";
+    job.refundStatus = "manual_refund_required";
+    job.refundReason = "Arcovia could not confirm a safe online purchase route for the selected option.";
+    job.finalQuote ||= {};
+    job.finalQuote.status = "no_online_purchase_available";
+    job.finalQuote.updatedAt = new Date().toISOString();
+    addTimeline(job, "no_online_purchase_available", job.refundReason);
+    upsertJob(job);
+    await sendAdminEmailForJob(job, "admin_refund_due", adminRefundDue(job));
+    await sendCustomerEmailForJob(job, "customer_no_online_purchase_available", customerNoOnlinePurchaseAvailable(job));
+    return redirect(res, auth.redirect);
+  }
+
+  const quote = ensureFinalQuote(job, selectedQuoteSource(job));
+  updateQuoteFromForm(quote, form);
+
+  if (action === "save_quote_draft") {
+    quote.status = "verification_pending";
+    job.status = "quote_verifying";
+    addTimeline(job, "quote_draft_saved", `Final quote draft saved at ${displayCurrency(quote.finalAmountZar)}.`);
+    upsertJob(job);
+    return redirect(res, auth.redirect);
+  }
+
+  if (action === "send_quote" || action === "resend_quote") {
+    if (!Number.isFinite(Number(quote.finalAmountZar)) || Number(quote.finalAmountZar) <= 0) {
+      addTimeline(job, "quote_send_blocked", "Final quote was not sent because the confirmed amount is missing or invalid.");
+      upsertJob(job);
+      return redirect(res, auth.redirect);
+    }
+    if (!isFinalPaymentOperational()) {
+      quote.status = "payment_setup_blocked";
+      job.status = "quote_verifying";
+      addTimeline(job, "quote_payment_blocked", finalPaymentBlockedMessage());
+      upsertJob(job);
+      return redirect(res, auth.redirect);
+    }
+
+    quote.status = "quote_ready";
+    quote.paymentStatus = "pending";
+    quote.expiresAt ||= addHours(new Date(), 24).toISOString();
+    job.status = "payment_pending";
+    addTimeline(job, "quote_ready", `Final quote ready and payment link prepared for ${displayCurrency(quote.finalAmountZar)}.`, {
+      quoteToken: quote.token,
+      paymentId: quote.paymentId
+    });
+    upsertJob(job);
+    const result = await sendCustomerEmailForJob(job, action === "resend_quote" ? "customer_quote_ready_resend" : "customer_quote_ready", customerQuoteReady(job));
+    if (result.ok) {
+      quote.sentAt = new Date().toISOString();
+      quote.lastEmailError = "";
+      addTimeline(job, "quote_email_sent", "Final quote payment link sent to customer.");
+    } else {
+      quote.lastEmailError = result.reason || "unknown email error";
+      addTimeline(job, "quote_email_failed", `Final quote email failed: ${quote.lastEmailError}`);
+    }
+    upsertJob(job);
+    return redirect(res, auth.redirect);
+  }
+
+  if (action === "mark_order_placed") {
+    updateSupplierOrderFromForm(job, form);
+    job.status = "order_placed";
+    job.supplierOrder.placedAt ||= new Date().toISOString();
+    addTimeline(job, "order_placed", "Supplier order marked as placed by Arcovia.", {
+      orderReference: job.supplierOrder.orderReference || "",
+      trackingNumber: job.supplierOrder.trackingNumber || ""
+    });
+    upsertJob(job);
+    await sendCustomerEmailForJob(job, "customer_order_placed", customerSupplierOrderPlaced(job));
+    return redirect(res, auth.redirect);
+  }
+
+  if (action === "update_tracking" || action === "mark_in_transit" || action === "mark_delivered") {
+    updateSupplierOrderFromForm(job, form);
+    job.status = action === "mark_delivered" ? "delivered" : "in_transit";
+    addTimeline(job, job.status, `Order status updated to ${statusLabel(job.status)}.`, {
+      trackingNumber: job.supplierOrder?.trackingNumber || "",
+      eta: job.supplierOrder?.eta || ""
+    });
+    upsertJob(job);
+    await sendCustomerEmailForJob(job, "customer_order_status_update", customerOrderStatusUpdate(job));
+    return redirect(res, auth.redirect);
+  }
+
+  addTimeline(job, "quote_action_ignored", `Unknown quote action ignored: ${action || "blank"}.`);
+  upsertJob(job);
+  return redirect(res, auth.redirect);
+}
+
+function resolveQuoteActionAuth(form, mode) {
+  const jobId = String(form.get("job_id") || "");
+  if (mode === "monitor") {
+    const key = String(form.get("key") || "");
+    if (!isValidMonitorKey(key)) {
+      return { ok: false, status: 401, html: monitorLoginHtml() };
+    }
+    const job = getJob(jobId);
+    if (!job) return { ok: false, status: 404, html: "<h1>Job not found</h1>" };
+    return { ok: true, job, key, redirect: `/monitor?key=${encodeURIComponent(key)}#${encodeURIComponent(job.id)}` };
+  }
+
+  const reviewToken = String(form.get("review_token") || "");
+  const job = getJobByReviewToken(reviewToken);
+  if (!job || (jobId && job.id !== jobId)) {
+    return { ok: false, status: 404, html: "<h1>Review job not found</h1>" };
+  }
+  return { ok: true, job, reviewToken, redirect: `/review/${encodeURIComponent(reviewToken)}#${encodeURIComponent(job.id)}` };
+}
+
+function handleQuotePage(_req, res, token) {
+  const job = getJobByQuoteToken(token);
+  if (!job) {
+    return html(res, 404, quotePageShell("Quote link not found", "<p>This Arcovia quote link is not active.</p>"));
+  }
+
+  const quote = job.finalQuote || {};
+  if (isQuoteExpired(quote) && !["balance_paid", "ready_to_order", "order_placed", "in_transit", "delivered"].includes(job.status)) {
+    quote.status = "quote_expired";
+    job.status = "quote_expired";
+    addTimeline(job, "quote_expired", "Customer quote link expired before payment was confirmed.");
+    upsertJob(job);
+  }
+
+  const selectedSource = job.customerSelectedOption?.supplier || job.selectedSupplier?.supplier || {};
+  const canPay = canPayQuote(job);
+  const paymentFields = canPay ? buildPayfastCheckoutFields(job) : null;
+  const paymentInputs = paymentFields
+    ? Object.entries(paymentFields).map(([key, value]) => `<input type="hidden" name="${escapeHtml(key)}" value="${escapeHtml(value)}" />`).join("")
+    : "";
+  const paymentBlock = canPay
+    ? `<form class="pay-card" method="POST" action="${escapeHtml(payfastProcessUrl())}">
+        ${paymentInputs}
+        <button type="submit">Pay ${escapeHtml(displayCurrency(quote.finalAmountZar))} securely with PayFast</button>
+        <p class="muted">After payment, Arcovia waits for PayFast confirmation before preparing the order.</p>
+      </form>`
+    : quote.status === "balance_paid" || job.status === "ready_to_order" || job.status === "order_placed"
+      ? `<div class="notice success"><strong>Payment confirmed.</strong><br>Arcovia is preparing or has placed the order.</div>`
+      : `<div class="notice"><strong>Payment is not available yet.</strong><br>${escapeHtml(customerPaymentUnavailableMessage(job))}</div>`;
+
+  return html(res, 200, quotePageShell("Arcovia final quote", `
+    <div class="badge">${escapeHtml(statusLabel(job.status))}</div>
+    <p class="muted">Order ${escapeHtml(job.orderName)} · ${escapeHtml(quote.optionLabel || "Selected option")}</p>
+    <section class="quote-grid">
+      <div>
+        ${customerOptionImageHtml(ensureCustomerOptionsToken(job), Number(quote.optionIndex || 0), job)}
+      </div>
+      <div class="quote-card">
+        <h2>Confirmed total</h2>
+        <div class="price">${escapeHtml(displayCurrency(quote.finalAmountZar))}</div>
+        <dl>
+          <dt>Item / supplier total</dt><dd>${escapeHtml(quote.itemCost || "Included in confirmed total")}</dd>
+          <dt>Shipping</dt><dd>${escapeHtml(quote.shippingCost || "Included or not applicable")}</dd>
+          <dt>Duties / import handling</dt><dd>${escapeHtml(quote.dutiesCost || "Included if applicable")}</dd>
+          <dt>Arcovia handling</dt><dd>${escapeHtml(quote.handlingFee || "Included if applicable")}</dd>
+          <dt>Quote expires</dt><dd>${escapeHtml(formatEventTime(quote.expiresAt))}</dd>
+        </dl>
+        <p class="muted">${escapeHtml(quote.customerNotes || "Final availability and price were reviewed by Arcovia before this quote link was sent.")}</p>
+      </div>
+    </section>
+    ${paymentBlock}
+    <section class="notice">
+      <strong>Refund and cancellation rule</strong><br>
+      If Arcovia cannot place the item order after your final payment, the final payment will be refunded or Arcovia will offer another approved option. After the supplier order is placed, cancellation and refunds depend on the supplier's policy.
+    </section>
+  `));
+}
+
+async function handlePayfastNotify(req, res) {
+  const rawBody = await readBody(req);
+  const parsed = parsePayfastBody(rawBody);
+  const paymentId = String(parsed.fields.m_payment_id || "");
+  const job = getJobByPayfastPaymentId(paymentId);
+  const verification = verifyPayfastSignature(rawBody);
+
+  if (!job) {
+    return json(res, 404, { error: "unknown_payment_id" });
+  }
+
+  job.finalQuote ||= {};
+  job.finalQuote.payfastNotifications ||= [];
+  const duplicateKey = `${parsed.fields.pf_payment_id || ""}:${parsed.fields.payment_status || ""}:${parsed.fields.amount_gross || parsed.fields.amount || ""}`;
+  if (job.finalQuote.payfastNotifications.some((entry) => entry.duplicateKey === duplicateKey)) {
+    return json(res, 200, { ok: true, duplicate: true });
+  }
+
+  job.finalQuote.payfastNotifications.push({
+    duplicateKey,
+    receivedAt: new Date().toISOString(),
+    fields: sanitizePayfastFields(parsed.fields)
+  });
+
+  if (!verification.ok) {
+    job.finalQuote.paymentStatus = "signature_failed";
+    job.finalQuote.lastPaymentError = verification.reason || "invalid_signature";
+    job.status = "payment_failed";
+    addTimeline(job, "payfast_signature_failed", "PayFast notification rejected because the signature was invalid.");
+    upsertJob(job);
+    return json(res, 400, { error: "invalid_signature" });
+  }
+
+  const paidAmount = parsed.fields.amount_gross || parsed.fields.amount;
+  if (!amountsMatch(job.finalQuote.finalAmountZar, paidAmount)) {
+    job.finalQuote.paymentStatus = "amount_mismatch";
+    job.finalQuote.lastPaymentError = `Expected ${formatPayfastAmount(job.finalQuote.finalAmountZar)}, received ${paidAmount || "missing"}.`;
+    job.status = "payment_failed";
+    addTimeline(job, "payfast_amount_mismatch", job.finalQuote.lastPaymentError);
+    upsertJob(job);
+    return json(res, 400, { error: "amount_mismatch" });
+  }
+
+  const paymentStatus = String(parsed.fields.payment_status || "").toUpperCase();
+  if (paymentStatus === "COMPLETE") {
+    job.finalQuote.status = "balance_paid";
+    job.finalQuote.paymentStatus = "COMPLETE";
+    job.finalQuote.paidAt = new Date().toISOString();
+    job.finalQuote.payfastPaymentId = parsed.fields.pf_payment_id || "";
+    job.status = "ready_to_order";
+    addTimeline(job, "balance_paid", `Final payment confirmed by PayFast for ${displayCurrency(job.finalQuote.finalAmountZar)}. Order is ready for Arcovia to place manually.`);
+    upsertJob(job);
+    await sendCustomerEmailForJob(job, "customer_final_payment_received", customerFinalPaymentReceived(job));
+    await sendAdminEmailForJob(job, "admin_final_payment_received", adminFinalPaymentReceived(job), { sensitive: true });
+    return json(res, 200, { ok: true });
+  }
+
+  job.finalQuote.paymentStatus = paymentStatus || "UNKNOWN";
+  job.finalQuote.lastPaymentError = `PayFast status: ${paymentStatus || "UNKNOWN"}`;
+  job.status = paymentStatus === "CANCELLED" ? "payment_failed" : "payment_pending";
+  addTimeline(job, "payfast_payment_not_complete", job.finalQuote.lastPaymentError);
+  upsertJob(job);
+  return json(res, 200, { ok: true, status: job.status });
+}
+
+function handlePayfastReturn(_req, res, url) {
+  const token = String(url.searchParams.get("quote") || "");
+  const job = getJobByQuoteToken(token);
+  const message = job?.finalQuote?.paymentStatus === "COMPLETE"
+    ? `<div class="notice success"><strong>Payment confirmed.</strong><br>Arcovia is preparing the order.</div>`
+    : `<div class="notice"><strong>Payment is being confirmed.</strong><br>If you paid successfully, Arcovia will update this page as soon as PayFast sends confirmation.</div>`;
+  return html(res, 200, quotePageShell("Payment confirmation", `
+    ${message}
+    ${job ? `<p><a class="button" href="/quote/${escapeHtml(token)}">Return to quote</a></p>` : ""}
+  `));
+}
+
+function handlePayfastCancel(_req, res, url) {
+  const token = String(url.searchParams.get("quote") || "");
+  const job = getJobByQuoteToken(token);
+  if (job) {
+    job.finalQuote ||= {};
+    job.finalQuote.paymentStatus = "cancelled_by_customer";
+    addTimeline(job, "payfast_cancel_return", "Customer returned from PayFast without completing payment.");
+    upsertJob(job);
+  }
+  return html(res, 200, quotePageShell("Payment not completed", `
+    <div class="notice"><strong>Payment was not completed.</strong><br>You can return to the quote and try again while the quote is still valid.</div>
+    ${job ? `<p><a class="button" href="/quote/${escapeHtml(token)}">Return to quote</a></p>` : ""}
+  `));
+}
+
+function updateQuoteFromForm(quote, form) {
+  const amount = Number(String(form.get("final_amount_zar") || "").replace(/,/g, "."));
+  if (Number.isFinite(amount) && amount > 0) quote.finalAmountZar = amount;
+  quote.itemCost = textFormValue(form, "item_cost") || quote.itemCost || "";
+  quote.shippingCost = textFormValue(form, "shipping_cost") || quote.shippingCost || "";
+  quote.dutiesCost = textFormValue(form, "duties_cost") || quote.dutiesCost || "";
+  quote.handlingFee = textFormValue(form, "handling_fee") || quote.handlingFee || "";
+  quote.customerNotes = textFormValue(form, "customer_notes") || quote.customerNotes || "";
+  quote.internalNotes = textFormValue(form, "internal_notes") || quote.internalNotes || "";
+  const expiryHours = Number(form.get("expiry_hours") || 24);
+  if (Number.isFinite(expiryHours) && expiryHours > 0) {
+    quote.expiresAt = addHours(new Date(), Math.min(168, expiryHours)).toISOString();
+  }
+  quote.verifiedAt = new Date().toISOString();
+  quote.updatedAt = quote.verifiedAt;
+}
+
+function selectedQuoteSource(job) {
+  const selected = job.customerSelectedOption || job.selectedSupplier || {};
+  return {
+    supplier: selected.supplier || {},
+    optionIndex: Number(selected.index || 0),
+    optionLabel: selected.optionLabel || customerOptionLabel(job, Number(selected.index || 0)),
+    sourceGroup: selected.sourceGroup || "suppliers",
+    selectedBy: job.customerSelectedOption ? "customer" : "arcovia"
+  };
+}
+
+function updateSupplierOrderFromForm(job, form) {
+  job.supplierOrder ||= {};
+  job.supplierOrder.orderReference = textFormValue(form, "supplier_order_reference") || job.supplierOrder.orderReference || "";
+  job.supplierOrder.trackingNumber = textFormValue(form, "tracking_number") || job.supplierOrder.trackingNumber || "";
+  job.supplierOrder.trackingUrl = textFormValue(form, "tracking_url") || job.supplierOrder.trackingUrl || "";
+  job.supplierOrder.eta = textFormValue(form, "eta") || job.supplierOrder.eta || "";
+  job.supplierOrder.notes = textFormValue(form, "order_notes") || job.supplierOrder.notes || "";
+  job.supplierOrder.updatedAt = new Date().toISOString();
+}
+
+function canPayQuote(job) {
+  const quote = job.finalQuote || {};
+  return isFinalPaymentOperational()
+    && !isQuoteExpired(quote)
+    && ["quote_ready", "payment_pending"].includes(job.status)
+    && ["quote_ready", "payment_pending"].includes(quote.status || "quote_ready")
+    && Number(quote.finalAmountZar || 0) > 0
+    && quote.paymentStatus !== "COMPLETE";
+}
+
+function isQuoteExpired(quote) {
+  return Boolean(quote?.expiresAt && new Date(quote.expiresAt) <= new Date() && quote.paymentStatus !== "COMPLETE");
+}
+
+function isFinalPaymentOperational() {
+  return isFinalPaymentStorageReady() && payfastConfigured();
+}
+
+function isFinalPaymentStorageReady() {
+  return storageHealth().dataDirConfigured || config.allowTemporaryPaymentStorage;
+}
+
+function finalPaymentBlockedMessage() {
+  if (!isFinalPaymentStorageReady()) {
+    return "Final payment link blocked: persistent storage is not configured. Add a Render disk and set ARCOVIA_DATA_DIR=/var/data before taking product-balance payments.";
+  }
+  if (!payfastConfigured()) {
+    return "Final payment link blocked: PayFast merchant credentials are not configured.";
+  }
+  return "Final payment link blocked: payment setup is incomplete.";
+}
+
+function customerPaymentUnavailableMessage(job) {
+  if (job.status === "quote_expired") return "This quote expired and must be re-confirmed before payment.";
+  if (!isFinalPaymentStorageReady()) return "Arcovia is finalizing the payment system before accepting this payment.";
+  if (!payfastConfigured()) return "Arcovia is finalizing the PayFast payment setup before accepting this payment.";
+  if (!job.finalQuote?.finalAmountZar) return "Arcovia still needs to confirm the final total.";
+  return "Arcovia still needs to confirm this quote before payment.";
+}
+
+function quotePageShell(title, body) {
+  return `<!doctype html>
+<html>
+<head>
+  <title>${escapeHtml(title)}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow" />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:Arial, sans-serif; background:#080406; color:#fff; }
+    header { padding:24px 16px; background:radial-gradient(circle at top right, rgba(122,16,40,.5), transparent 42%), linear-gradient(135deg,#16080d,#320817); border-bottom:1px solid #6b1024; }
+    main { max-width:980px; margin:0 auto; padding:18px; }
+    h1 { margin:0 0 8px; font-size:30px; letter-spacing:-.02em; }
+    h2 { margin:0 0 10px; }
+    p { line-height:1.5; }
+    a { color:#ffd7df; }
+    .muted { color:#d8b8c0; font-size:14px; }
+    .badge { display:inline-block; margin:8px 0 14px; padding:8px 12px; border-radius:999px; background:#7a1028; font-weight:900; text-transform:uppercase; font-size:12px; letter-spacing:.05em; }
+    .quote-grid { display:grid; gap:16px; margin:18px 0; }
+    .quote-card, .notice, .pay-card { border:1px solid #4b1724; background:#13080c; border-radius:20px; padding:16px; box-shadow:0 12px 30px rgba(0,0,0,.22); }
+    .notice.success { border-color:#2f8f58; background:#092014; }
+    .price { display:inline-block; margin:4px 0 12px; padding:12px 14px; border-radius:14px; background:#7a1028; border:1px solid #bc3456; font-weight:900; font-size:22px; }
+    dl { display:grid; gap:8px; margin:12px 0; }
+    dt { color:#d8b8c0; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+    dd { margin:0 0 8px; font-weight:800; }
+    button, .button { cursor:pointer; display:inline-block; border:1px solid #bc3456; background:#7a1028; color:#fff; padding:14px 18px; border-radius:999px; font-weight:900; font-size:16px; text-decoration:none; }
+    .option-gallery { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; align-content:start; }
+    .option-gallery.single { grid-template-columns:1fr; }
+    .option-image { width:100%; height:150px; border-radius:16px; border:1px solid #34111a; object-fit:cover; background:#1a0a0f; display:block; }
+    .option-gallery.single .option-image { height:260px; }
+    .image-fallback { width:100%; min-height:220px; border-radius:16px; border:1px dashed #562033; background:linear-gradient(145deg,#1d0a10,#080406); color:#d8b8c0; display:flex; align-items:center; justify-content:center; text-align:center; font-size:13px; line-height:1.25; padding:10px; }
+    @media (min-width:760px) { .quote-grid { grid-template-columns:minmax(260px,380px) minmax(0,1fr); } }
+  </style>
+</head>
+<body>
+  <header><main><h1>${escapeHtml(title)}</h1><p class="muted">Secure Arcovia sourcing payment page.</p></main></header>
+  <main>${body}</main>
+</body>
+</html>`;
+}
+
+function textFormValue(form, key) {
+  return String(form.get(key) || "").trim();
+}
+
+function displayCurrency(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) return "To be confirmed";
+  return `R${amount.toFixed(2)}`;
+}
+
+function sanitizePayfastFields(fields) {
+  const output = {};
+  for (const [key, value] of Object.entries(fields || {})) {
+    if (/key|passphrase|signature/i.test(key)) continue;
+    output[key] = String(value || "").slice(0, 500);
+  }
+  return output;
 }
 
 function handleCustomerOptionsPage(_req, res, token, url) {
@@ -755,14 +1261,27 @@ async function handleCustomerOptionSelect(req, res) {
       selectedAt: new Date().toISOString(),
       supplier
     };
+    ensureFinalQuote(job, {
+      supplier,
+      optionIndex,
+      optionLabel,
+      sourceGroup: "suppliers",
+      selectedBy: "customer"
+    });
+    job.status = "quote_verifying";
+    job.nextUpdateAt = null;
+    job.nextResearchAt = null;
+    job.currentResearchAttempt = null;
     addTimeline(job, "customer_option_selected", `Customer selected ${optionLabel}. Arcovia must still confirm and approve before purchasing.`, {
       optionIndex,
       optionLabel,
       supplierName: supplier.name || "",
       supplierUrl: supplier.url || ""
     });
+    addTimeline(job, "quote_verifying", "Customer choice received. Arcovia must confirm live availability, delivery, and final total before sending a payment link.");
     upsertJob(job);
-    await sendSensitiveAdminEmailForJob(job, customerOptionSelectedAdmin(job));
+    await sendAdminEmailForJob(job, "customer_option_selected_admin", customerOptionSelectedAdmin(job), { sensitive: true });
+    await sendCustomerEmailForJob(job, "customer_choice_received", customerChoiceReceived(job));
   }
 
   return redirect(res, `/options/${encodeURIComponent(token)}?selected=1`);
@@ -807,6 +1326,39 @@ async function handleCustomerOptionImage(_req, res, pathname) {
   }
 }
 
+function ensureFinalQuote(job, { supplier, optionIndex = 0, optionLabel = "", sourceGroup = "suppliers", selectedBy = "arcovia" } = {}) {
+  job.finalQuote ||= {};
+  job.finalQuote.id ||= randomUUID();
+  job.finalQuote.token ||= randomUUID();
+  job.finalQuote.paymentId ||= `ARC-${safePaymentId(job.orderName || job.id)}-${String(job.finalQuote.id).slice(0, 8)}`;
+  job.finalQuote.status ||= "verification_pending";
+  job.finalQuote.optionIndex = optionIndex;
+  job.finalQuote.optionLabel = optionLabel || customerOptionLabel(job, optionIndex);
+  job.finalQuote.sourceGroup = sourceGroup;
+  job.finalQuote.selectedBy = selectedBy;
+  job.finalQuote.estimateFromResearch = displayRandTotal(supplier || {});
+  job.finalQuote.estimatedAmountZar = parseRandAmount(job.finalQuote.estimateFromResearch);
+  job.finalQuote.requiresManualVerification = true;
+  job.finalQuote.updatedAt = new Date().toISOString();
+  if (!job.finalQuote.createdAt) job.finalQuote.createdAt = job.finalQuote.updatedAt;
+  return job.finalQuote;
+}
+
+function safePaymentId(value) {
+  return String(value || "ORDER")
+    .replace(/^#/, "")
+    .replace(/[^a-z0-9_-]/gi, "")
+    .slice(0, 32) || "ORDER";
+}
+
+function parseRandAmount(value) {
+  const text = String(value || "").replace(/,/g, "");
+  const match = text.match(/(?:R|ZAR)?\s*(\d+(?:\.\d{1,2})?)/i);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
 function getSelectableSource(job, sourceGroup, sourceIndex) {
   const groups = {
     suppliers: job?.research?.suppliers || [],
@@ -817,13 +1369,23 @@ function getSelectableSource(job, sourceGroup, sourceIndex) {
 }
 
 function markSupplierSelected(job, supplier, supplierIndex, sourceGroup = "suppliers") {
+  const optionLabel = sourceGroup === "suppliers"
+    ? customerOptionLabel(job, supplierIndex)
+    : `Internal ${sourceGroupLabel(sourceGroup)} option ${supplierIndex + 1}`;
   job.selectedSupplier = {
     index: supplierIndex,
     sourceGroup,
     selectedAt: new Date().toISOString(),
     supplier
   };
-  job.status = "supplier_selected";
+  ensureFinalQuote(job, {
+    supplier,
+    optionIndex: supplierIndex,
+    optionLabel,
+    sourceGroup,
+    selectedBy: "arcovia"
+  });
+  job.status = "quote_verifying";
   job.nextUpdateAt = null;
   job.nextResearchAt = null;
   job.currentResearchAttempt = null;
@@ -834,6 +1396,7 @@ function markSupplierSelected(job, supplier, supplierIndex, sourceGroup = "suppl
     supplierName: supplier.name || "",
     supplierUrl: supplier.url || ""
   });
+  addTimeline(job, "quote_verifying", "Selected source is waiting for live availability, shipping, and final total verification before a payment link is sent.");
   upsertJob(job);
 }
 
@@ -867,8 +1430,9 @@ function handleMonitorLitePage(_req, res) {
     .card { border:1px solid #6b1024; background:#16080d; border-radius:18px; padding:16px; box-shadow:0 12px 30px rgba(0,0,0,.25); }
     .status { display:inline-block; padding:7px 10px; border-radius:999px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; font-size:12px; }
     .researching { background:#8a5b00; }
-    .human_review, .supplier_selected { background:#165c35; }
-    .refund_due, .research_failed { background:#7a1028; }
+    .human_review, .supplier_selected, .options_sent, .quote_ready, .balance_paid, .ready_to_order, .order_placed, .in_transit, .delivered { background:#165c35; }
+    .refund_due, .research_failed, .payment_failed, .quote_expired, .supplier_unavailable, .no_online_purchase_available { background:#7a1028; }
+    .quote_verifying, .payment_pending, .customer_selected_option { background:#8a5b00; }
     .awaiting_brief { background:#4b5563; }
     .stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:14px 0; }
     .stat { background:#0f0609; border:1px solid #3a101b; border-radius:14px; padding:12px; }
@@ -919,6 +1483,9 @@ function serializeJob(job, details = false) {
     refundReason: job.refundReason || null,
     selectedSupplier: job.selectedSupplier || null,
     customerSelectedOption: job.customerSelectedOption || null,
+    finalQuote: job.finalQuote || null,
+    supplierOrder: job.supplierOrder || null,
+    emailLog: job.emailLog || [],
     productRequestPresent: Boolean(job.productRequest?.trim()),
     supplierCount: job.research?.suppliers?.length || 0,
     candidateSourceCount: job.research?.candidateSources?.length || 0,
@@ -977,6 +1544,16 @@ function getJobByCustomerOptionsToken(token) {
   return readJobs().find((job) => job.customerOptionsToken === token);
 }
 
+function getJobByQuoteToken(token) {
+  if (!token) return null;
+  return readJobs().find((job) => job.finalQuote?.token === token);
+}
+
+function getJobByPayfastPaymentId(paymentId) {
+  if (!paymentId) return null;
+  return readJobs().find((job) => job.finalQuote?.paymentId === paymentId);
+}
+
 function ensureCustomerOptionsToken(job) {
   if (!job) return "";
   if (job.customerOptionsToken) return job.customerOptionsToken;
@@ -1028,6 +1605,8 @@ function monitorJobCard(job, auth = {}) {
   const selected = job.selectedSupplier?.supplier;
   const selectedHtml = selected ? selectedSourceBox(selected, job.selectedSupplier) : "";
   const customerSelectedHtml = job.customerSelectedOption ? customerSelectedOptionBox(job.customerSelectedOption, job) : "";
+  const quotePanelHtml = quoteActionPanel(job, auth, formAction, formAuthFields);
+  const emailLogHtml = emailLogPanel(job.emailLog || []);
   const missingDetails = (job.missingCustomerDetails || []).slice(0, 5).map((detail) => `<li>${escapeHtml(detail)}</li>`).join("");
   const nextLine = job.nextResearchAt ? `<p class="muted">Next sourcing check: ${escapeHtml(formatEventTime(job.nextResearchAt))}</p>` : "";
   const completedLine = job.researchCompletedAt ? `<p class="muted">Research completed: ${escapeHtml(formatEventTime(job.researchCompletedAt))}</p>` : "";
@@ -1108,6 +1687,8 @@ function monitorJobCard(job, auth = {}) {
       ${missingDetails ? `<div class="warning-box"><h3>Missing details / questions</h3><ul class="mini-list">${missingDetails}</ul></div>` : ""}
       ${customerSelectedHtml}
       ${selectedHtml}
+      ${quotePanelHtml}
+      ${emailLogHtml}
       <div class="section-stack">${sourceSections}</div>
       <div class="timeline-wrap">
         <h3>Latest activity</h3>
@@ -1131,6 +1712,119 @@ function sourceSection({ title, subtitle, items, group, cardType, formAction, fo
       <span class="count-badge">${escapeHtml((items || []).length)}</span>
     </summary>
     ${cards ? `<div class="source-grid">${cards}</div>` : `<div class="empty-section">No ${escapeHtml(title.toLowerCase())} captured yet.</div>`}
+  </details>`;
+}
+
+function quoteActionPanel(job, auth = {}, _sourceFormAction, _sourceFormAuthFields) {
+  const selected = job.customerSelectedOption || job.selectedSupplier;
+  const quote = job.finalQuote || null;
+  const showPanel = Boolean(selected || quote || ["quote_verifying", "quote_ready", "payment_pending", "ready_to_order", "order_placed", "in_transit", "delivered", "payment_failed", "quote_expired"].includes(job.status));
+  if (!showPanel) {
+    return `<div class="quote-admin">
+      <h3>Customer email actions</h3>
+      <p class="muted">Use this if research is complete but the customer options email did not send.</p>
+      ${quoteActionForm(job, auth, `<div class="quote-actions"><button name="action" value="resend_options" type="submit">Send / resend customer options</button></div>`)}
+    </div>`;
+  }
+
+  const quoteToken = quote?.token || "";
+  const quoteLink = quoteToken ? `${config.publicBaseUrl.replace(/\/$/, "")}/quote/${quoteToken}` : "";
+  const blocked = !isFinalPaymentOperational() ? `<div class="warning-box"><strong>Payment link blocked.</strong><br>${escapeHtml(finalPaymentBlockedMessage())}</div>` : "";
+  const amountValue = quote?.finalAmountZar || quote?.estimatedAmountZar || "";
+  const paymentStatus = quote?.paymentStatus || quote?.status || "verification pending";
+  const order = job.supplierOrder || {};
+
+  return `<div class="quote-admin">
+    <h3>Final quote and payment</h3>
+    <p class="muted">Selected option: ${escapeHtml(quote?.optionLabel || selected?.optionLabel || "No option selected")} · Quote status: ${escapeHtml(paymentStatus)}${quoteLink ? ` · <a href="${escapeHtml(quoteLink)}" target="_blank" rel="noreferrer">Open quote page</a>` : ""}</p>
+    ${blocked}
+    ${quoteActionForm(job, auth, `
+      <div class="quote-fields">
+        <label>Confirmed final amount in rand
+          <input name="final_amount_zar" inputmode="decimal" value="${escapeHtml(amountValue)}" placeholder="Example: 2499.00" />
+        </label>
+        <label>Quote expiry hours
+          <input name="expiry_hours" inputmode="numeric" value="24" />
+        </label>
+        <label>Item / supplier total
+          <input name="item_cost" value="${escapeHtml(quote?.itemCost || quote?.estimateFromResearch || "")}" placeholder="Example: R1,900 item price" />
+        </label>
+        <label>Shipping
+          <input name="shipping_cost" value="${escapeHtml(quote?.shippingCost || "")}" placeholder="Example: R350 delivery" />
+        </label>
+        <label>Duties / import handling
+          <input name="duties_cost" value="${escapeHtml(quote?.dutiesCost || "")}" placeholder="Example: Included / R250 estimated" />
+        </label>
+        <label>Arcovia handling
+          <input name="handling_fee" value="${escapeHtml(quote?.handlingFee || "")}" placeholder="Example: Included" />
+        </label>
+        <label class="wide">Customer-safe quote note
+          <textarea name="customer_notes" rows="2" placeholder="Short customer-safe note, no supplier names or websites.">${escapeHtml(quote?.customerNotes || "")}</textarea>
+        </label>
+        <label class="wide">Internal notes
+          <textarea name="internal_notes" rows="2" placeholder="Internal verification notes.">${escapeHtml(quote?.internalNotes || "")}</textarea>
+        </label>
+      </div>
+      <div class="quote-actions">
+        <button name="action" value="save_quote_draft" type="submit">Save quote draft</button>
+        <button class="button success" name="action" value="send_quote" type="submit">Send final quote link</button>
+        <button class="button secondary" name="action" value="resend_quote" type="submit">Resend quote link</button>
+        <button class="button secondary" name="action" value="resend_options" type="submit">Resend customer options</button>
+        <button class="button warning" name="action" value="no_online_purchase" type="submit">No safe online purchase / refund due</button>
+      </div>
+    `)}
+    <h3>Supplier order update</h3>
+    <p class="muted">Use this only after customer final payment is confirmed and you have placed the supplier order.</p>
+    ${quoteActionForm(job, auth, `
+      <div class="quote-fields">
+        <label>Supplier order reference
+          <input name="supplier_order_reference" value="${escapeHtml(order.orderReference || "")}" />
+        </label>
+        <label>Tracking number
+          <input name="tracking_number" value="${escapeHtml(order.trackingNumber || "")}" />
+        </label>
+        <label>Tracking URL
+          <input name="tracking_url" value="${escapeHtml(order.trackingUrl || "")}" />
+        </label>
+        <label>ETA
+          <input name="eta" value="${escapeHtml(order.eta || "")}" placeholder="Example: 12-18 July" />
+        </label>
+        <label class="wide">Order notes
+          <textarea name="order_notes" rows="2">${escapeHtml(order.notes || "")}</textarea>
+        </label>
+      </div>
+      <div class="quote-actions">
+        <button class="button success" name="action" value="mark_order_placed" type="submit">Mark supplier order placed</button>
+        <button class="button secondary" name="action" value="mark_in_transit" type="submit">Mark in transit</button>
+        <button class="button success" name="action" value="mark_delivered" type="submit">Mark delivered</button>
+      </div>
+    `)}
+  </div>`;
+}
+
+function quoteActionForm(job, auth = {}, innerHtml = "") {
+  const action = auth.reviewToken ? "/review/quote-action" : "/monitor/quote-action";
+  const authFields = auth.reviewToken
+    ? `<input type="hidden" name="review_token" value="${escapeHtml(auth.reviewToken)}" />`
+    : `<input type="hidden" name="key" value="${escapeHtml(auth.key || "")}" />`;
+  return `<form method="POST" action="${escapeHtml(action)}">
+    ${authFields}
+    <input type="hidden" name="job_id" value="${escapeHtml(job.id)}" />
+    ${innerHtml}
+  </form>`;
+}
+
+function emailLogPanel(emailLog = []) {
+  const rows = (emailLog || []).slice(-8).reverse().map((entry) => `<tr>
+    <td>${escapeHtml(formatEventTime(entry.at))}</td>
+    <td>${escapeHtml(entry.audience || "")}</td>
+    <td>${escapeHtml(entry.templateName || "")}<br><span class="muted">${escapeHtml(entry.subject || "")}</span></td>
+    <td class="${entry.ok ? "email-ok" : "email-fail"}">${escapeHtml(entry.ok ? "sent" : entry.blocked ? "blocked" : entry.skipped ? "skipped" : "failed")}</td>
+    <td>${escapeHtml(entry.reason || "")}</td>
+  </tr>`).join("");
+  return `<details class="email-log">
+    <summary>Email log (${escapeHtml((emailLog || []).length)})</summary>
+    ${rows ? `<table><thead><tr><th>Time</th><th>To</th><th>Template</th><th>Status</th><th>Reason</th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="muted">No email attempts recorded yet.</p>`}
   </details>`;
 }
 
@@ -2031,22 +2725,22 @@ async function sendDueUpdates() {
   for (const job of jobs) {
     if (!job.nextUpdateAt) continue;
     if (new Date(job.nextUpdateAt) > now) continue;
-    if (["supplier_selected", "quote_ready", "cancelled", "refunded", "refund_due"].includes(job.status)) continue;
+    if (["supplier_selected", "quote_verifying", "quote_ready", "payment_pending", "balance_paid", "ready_to_order", "order_placed", "in_transit", "delivered", "cancelled", "refunded", "refund_due", "no_online_purchase_available"].includes(job.status)) continue;
 
     const sourcingWindowEndsAt = job.sourcingWindowEndsAt;
-    if (sourcingWindowEndsAt && new Date(sourcingWindowEndsAt) <= now && !["human_review", "quote_ready"].includes(job.status)) {
+    if (sourcingWindowEndsAt && new Date(sourcingWindowEndsAt) <= now && !["human_review", "options_sent", "quote_ready", "payment_pending", "ready_to_order", "order_placed", "in_transit", "delivered"].includes(job.status)) {
       job.status = "refund_due";
       job.refundStatus = "manual_refund_required";
       job.refundReason = "The sourcing window ended without a verified trustworthy match.";
       job.nextUpdateAt = null;
       addTimeline(job, "refund_due", job.refundReason);
       upsertJob(job);
-      await sendEmail({ to: config.adminEmail, ...adminRefundDue(job) });
-      await sendCustomerEmail({ to: job.customerEmail, ...customerRefundDue(job) });
+      await sendAdminEmailForJob(job, "admin_refund_due", adminRefundDue(job));
+      await sendCustomerEmailForJob(job, "customer_refund_due", customerRefundDue(job));
       continue;
     }
 
-    await sendCustomerEmail({ to: job.customerEmail, ...stageUpdate(job) });
+    await sendCustomerEmailForJob(job, "stage_update", stageUpdate(job));
     job.nextUpdateAt = addHours(now, config.updateIntervalHours).toISOString();
     addTimeline(job, "customer_update_sent", `Customer update sent for status ${job.status}.`);
     upsertJob(job);
@@ -2143,6 +2837,21 @@ function customerTimelineMessage(event, job = {}) {
     customer_update_sent: "A sourcing update was sent by email.",
     customer_option_selected: "Your chosen option was received.",
     supplier_selected: "Arcovia selected an option for follow-up.",
+    quote_verifying: "Arcovia is confirming availability, delivery, and the final total.",
+    quote_draft_saved: "Arcovia saved the final quote draft.",
+    quote_ready: "Your final quote is ready.",
+    quote_email_sent: "Your final quote link was sent by email.",
+    quote_email_failed: "The quote email could not be sent automatically. Arcovia is checking it.",
+    quote_payment_blocked: "Arcovia is finalizing the payment setup before sending the payment link.",
+    balance_paid: "Your final payment has been confirmed.",
+    payfast_payment_not_complete: "Final payment has not been confirmed yet.",
+    payfast_cancel_return: "Payment was not completed.",
+    order_placed: "Your item order has been placed.",
+    in_transit: "Your item order is in transit.",
+    delivered: "Your item order has been marked as delivered.",
+    no_online_purchase_available: "Arcovia could not confirm a safe online purchase route. Your refundable deposit is marked for refund processing.",
+    quote_expired: "The quote expired and must be confirmed again before payment.",
+    payment_failed: "The final payment was not confirmed.",
     refund_due: "No trusted supplier was found after the full sourcing checks. Your refundable deposit is marked for refund processing.",
     research_failed: "The sourcing process needs attention. Arcovia is checking it."
   };
@@ -2183,11 +2892,25 @@ function statusLabel(status) {
     researching: "Searching for product",
     vetting: "Checking suppliers",
     human_review: "Supplier options ready",
+    options_sent: "Options sent",
+    customer_selected_option: "Customer selected option",
+    quote_verifying: "Confirming final quote",
     supplier_selected: "Supplier selected",
     quote_ready: "Quote ready",
+    payment_pending: "Payment pending",
+    balance_paid: "Final payment received",
+    ready_to_order: "Ready to order",
+    order_placed: "Order placed",
+    in_transit: "In transit",
+    delivered: "Delivered",
     no_match: "No match found yet",
+    no_online_purchase_available: "No online purchase available",
+    supplier_unavailable: "Supplier unavailable",
+    quote_expired: "Quote expired",
+    payment_failed: "Payment failed",
     refund_due: "Refund due",
     research_failed: "Research needs attention"
   };
   return labels[status] || String(status || "In progress").replaceAll("_", " ");
 }
+

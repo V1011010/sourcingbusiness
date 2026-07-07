@@ -60,6 +60,35 @@ export function appendOutbox(message) {
   writeFileSync(outboxPath, JSON.stringify(current, null, 2));
 }
 
+export function recordEmailAudit(job, message) {
+  if (!job) return null;
+  job.emailLog ||= [];
+  const templateName = String(message?.templateName || "unknown");
+  const recipient = String(message?.to || "");
+  const resendCount = job.emailLog.filter((entry) => (
+    entry.templateName === templateName && String(entry.to || "") === recipient
+  )).length + 1;
+  const result = message?.result || {};
+  const entry = {
+    id: randomUUID(),
+    templateName,
+    audience: message?.audience || "customer",
+    to: recipient,
+    subject: message?.subject || "",
+    ok: Boolean(result.ok),
+    blocked: Boolean(result.blocked),
+    dryRun: Boolean(result.dryRun),
+    skipped: Boolean(result.skipped),
+    reason: String(result.reason || ""),
+    providerId: result.id || result.providerId || null,
+    resendCount,
+    at: new Date().toISOString()
+  };
+  job.emailLog.push(entry);
+  job.updatedAt = entry.at;
+  return entry;
+}
+
 export function storageHealth() {
   return {
     dataDirConfigured: dataDir !== "data",
