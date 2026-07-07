@@ -55,7 +55,10 @@ Fill in `.env`:
 - `OPENAI_API_KEY`
 - `PUBLIC_BASE_URL`
 - `ARCOVIA_FLOW_SECRET`
-- `RESEND_API_KEY` if you want real emails
+- `RESEND_API_KEY` if you want real emails through Resend
+- `EMAIL_PROVIDER=auto` tries Gmail SMTP first when configured, then Resend
+- `SMTP_USER` and `SMTP_PASSWORD` let the backend send through Gmail SMTP with a Google App Password as a temporary free fallback
+- `EMAIL_ADMIN_RELAY_ON_FAILURE=true` copies safe customer emails to admin when Resend blocks customer delivery because the sender domain is not verified
 - `ADMIN_EMAIL`
 - `DEEP_RESEARCH_MAX_ATTEMPTS` defaults to `3`; the current worker policy is fixed at 3 completed deep research passes total
 - `DEEP_RESEARCH_NO_MATCH_RETRIES` defaults to `2`
@@ -159,7 +162,42 @@ How it works:
 
 Keep the PC awake, online, and signed in. If the local session logs out or the PC sleeps, new research jobs wait until the worker is running again.
 
-Customer email delivery is still handled by the backend email system, not by free-form Codex drafting. That is intentional: automatic customer emails must pass the customer-safety guard before sending. Codex/Gmail can be used manually from a Codex session to create or send a reviewed message, but the live automation should use Resend or another real mail API for automatic delivery.
+Customer email delivery is still handled by the backend email system, not by free-form Codex drafting. That is intentional: automatic customer emails must pass the customer-safety guard before sending. Codex/Gmail can be used manually from a Codex session to create or send a reviewed message, but the live automation should use Resend, Gmail SMTP, or another real mail API for automatic delivery.
+
+## Temporary email fallback
+
+Resend's free plan can send production emails, but Resend requires a verified sending domain to send to real customer addresses. The default `onboarding@resend.dev` sender is only for testing and can only send to the Resend account's own email address.
+
+Until the Arcovia domain is verified in Resend, use one of these fallbacks:
+
+### Option A: Gmail SMTP fallback
+
+Set these Render environment variables:
+
+```env
+EMAIL_PROVIDER=auto
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+SMTP_SECURE=true
+SMTP_USER=arcovia.africa@gmail.com
+SMTP_PASSWORD=your-google-app-password
+SMTP_FROM_EMAIL=Arcovia <arcovia.africa@gmail.com>
+REPLY_TO_EMAIL=arcovia.africa@gmail.com
+```
+
+Use a Google App Password, not the normal Gmail password.
+
+### Option B: Admin relay while Resend is blocked
+
+If Gmail SMTP is not configured yet, keep:
+
+```env
+EMAIL_ADMIN_RELAY_ON_FAILURE=true
+RESEND_TEST_FROM_EMAIL=Arcovia <onboarding@resend.dev>
+EMAIL_OUTBOX_COUNTS_AS_SENT=false
+```
+
+When Resend blocks a customer email because the domain is not verified, the backend tries to send a copy to `ADMIN_EMAIL` with the original customer recipient and safe message body. It does not mark the customer email as sent. Use this only as a temporary manual-forwarding fallback.
 
 ## Persistent job storage
 

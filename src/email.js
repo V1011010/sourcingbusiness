@@ -1,3 +1,5 @@
+import net from "node:net";
+import tls from "node:tls";
 import { appendOutbox } from "./storage.js";
 import { config } from "./config.js";
 
@@ -7,13 +9,40 @@ export async function sendEmail({ to, subject, text }) {
     return { ok: false, dryRun: true, reason: "missing recipient" };
   }
 
-  if (!config.resendApiKey) {
-    appendOutbox({ to, from: config.fromEmail, replyTo: config.replyToEmail, subject, text, dryRun: true });
-    return { ok: true, dryRun: true };
+  const providers = emailProviderPlan();
+  if (!providers.length) {
+    appendOutbox({ to, from: activeFromEmail(), replyTo: config.replyToEmail, subject, text, dryRun: true, failed: true, detail: "no_email_provider_configured" });
+    return {
+      ok: config.emailOutboxCountsAsSent,
+      dryRun: true,
+      reason: config.emailOutboxCountsAsSent ? "" : "no_email_provider_configured"
+    };
   }
 
+  const failures = [];
+  for (const provider of providers) {
+    const result = await sendWithProvider(provider, { to, subject, text });
+    if (result.ok) return result;
+    failures.push(result);
+  }
+
+  const relayResult = await maybeRelayToAdmin({ to, subject, text, failures });
+  if (relayResult) return relayResult;
+
+  const reason = failures.map((failure) => failure.reason).filter(Boolean).join(" | ") || "email_send_failed";
+  appendOutbox({ to, from: activeFromEmail(), replyTo: config.replyToEmail, subject, text, failed: true, detail: reason });
+  return { ok: false, dryRun: false, reason };
+}
+
+async function sendWithProvider(provider, message) {
+  if (provider === "smtp") return sendViaSmtp(message);
+  if (provider === "resend") return sendViaResend({ ...message, from: config.fromEmail, provider: "resend" });
+  return { ok: false, reason: `unknown_email_provider:${provider}` };
+}
+
+async function sendViaResend({ from, to, subject, text, provider = "resend" }) {
   const response = await sendResendEmail({
-    from: config.fromEmail,
+    from,
     to,
     subject,
     text
@@ -21,13 +50,12 @@ export async function sendEmail({ to, subject, text }) {
 
   if (!response.ok) {
     const detail = await response.text();
-    appendOutbox({ to, from: config.fromEmail, replyTo: config.replyToEmail, subject, text, failed: true, detail });
-    return { ok: false, dryRun: false, reason: detail };
+    return { ok: false, dryRun: false, provider, reason: detail, domainRestricted: isResendDomainRestriction(detail) };
   }
 
   const detail = await response.text();
   const parsed = parseJson(detail);
-  return { ok: true, dryRun: false, id: parsed?.id || null };
+  return { ok: true, dryRun: false, provider, id: parsed?.id || null };
 }
 
 export async function sendCustomerEmail({ to, subject, text }) {
@@ -78,6 +106,241 @@ function sendResendEmail({ from, to, subject, text }) {
       ...(config.replyToEmail ? { reply_to: config.replyToEmail } : {})
     })
   });
+}
+
+function emailProviderPlan() {
+  const provider = config.emailProvider || "auto";
+  if (provider === "outbox" || provider === "none") return [];
+  if (provider === "smtp") return smtpConfigured() ? ["smtp"] : [];
+  if (provider === "resend") return config.resendApiKey ? ["resend"] : [];
+
+  const providers = [];
+  if (smtpConfigured()) providers.push("smtp");
+  if (config.resendApiKey) providers.push("resend");
+  return providers;
+}
+
+function smtpConfigured() {
+  return Boolean(config.smtpHost && config.smtpUser && config.smtpPassword);
+}
+
+function activeFromEmail() {
+  return smtpConfigured() && (config.emailProvider === "smtp" || config.emailProvider === "auto")
+    ? config.smtpFromEmail
+    : config.fromEmail;
+}
+
+async function maybeRelayToAdmin({ to, subject, text, failures }) {
+  if (!config.emailAdminRelayOnFailure) return null;
+  if (!config.adminEmail || sameEmail(config.adminEmail, to)) return null;
+
+  const restrictedFailure = failures.find((failure) => failure.domainRestricted || isResendDomainRestriction(failure.reason));
+  if (!restrictedFailure && failures.length) return null;
+
+  const relaySubject = `[Arcovia customer email not sent] ${subject || "Customer update"}`.slice(0, 180);
+  const relayText = `This customer email was NOT sent automatically.
+
+Reason:
+${failures.map((failure) => failure.reason || "unknown").join("\n")}
+
+Original recipient:
+${to}
+
+Copy the safe message below and send it manually, or configure Gmail SMTP / verify the Resend domain.
+
+--- CUSTOMER MESSAGE START ---
+${text || ""}
+--- CUSTOMER MESSAGE END ---`;
+
+  const relayProviders = [];
+  if (smtpConfigured()) relayProviders.push("smtp");
+  if (config.resendApiKey) relayProviders.push("resend_test");
+
+  for (const provider of relayProviders) {
+    const result = provider === "smtp"
+      ? await sendViaSmtp({ to: config.adminEmail, subject: relaySubject, text: relayText })
+      : await sendViaResend({ from: config.resendTestFromEmail, to: config.adminEmail, subject: relaySubject, text: relayText, provider: "resend_test_admin_relay" });
+    if (result.ok) {
+      appendOutbox({
+        to,
+        relayedTo: config.adminEmail,
+        from: provider === "smtp" ? config.smtpFromEmail : config.resendTestFromEmail,
+        replyTo: config.replyToEmail,
+        subject,
+        text,
+        relayed: true,
+        failed: true,
+        detail: failures.map((failure) => failure.reason || "unknown").join(" | ")
+      });
+      return {
+        ok: false,
+        dryRun: false,
+        relayed: true,
+        provider: result.provider,
+        providerId: result.id,
+        reason: `customer_email_not_sent_relayed_to_admin:${failures.map((failure) => safeReason(failure.reason)).filter(Boolean).join("|")}`
+      };
+    }
+  }
+
+  return null;
+}
+
+async function sendViaSmtp({ to, subject, text }) {
+  try {
+    const result = await sendSmtpEmail({
+      host: config.smtpHost,
+      port: config.smtpPort,
+      secure: config.smtpSecure,
+      username: config.smtpUser,
+      password: config.smtpPassword,
+      from: config.smtpFromEmail,
+      replyTo: config.replyToEmail,
+      to,
+      subject,
+      text
+    });
+    return { ok: true, dryRun: false, provider: "smtp", id: result.messageId };
+  } catch (error) {
+    return { ok: false, dryRun: false, provider: "smtp", reason: safeReason(error?.message || error) };
+  }
+}
+
+function sendSmtpEmail({ host, port, secure, username, password, from, replyTo, to, subject, text }) {
+  return new Promise((resolve, reject) => {
+    const socket = secure
+      ? tls.connect({ host, port, servername: host })
+      : net.connect({ host, port });
+    let buffer = "";
+    const pending = [];
+    const messageId = `<arcovia-${Date.now()}-${Math.random().toString(16).slice(2)}@arcovia.africa>`;
+
+    socket.setTimeout(30_000, () => {
+      socket.destroy(new Error("smtp_timeout"));
+    });
+
+    socket.on("data", (chunk) => {
+      buffer += chunk.toString("utf8");
+      drainResponses();
+    });
+    socket.on("error", reject);
+
+    function drainResponses() {
+      while (true) {
+        const lines = buffer.split(/\r?\n/);
+        const completeIndex = lines.findIndex((line) => /^\d{3} /.test(line));
+        if (completeIndex === -1) return;
+        const responseLines = lines.slice(0, completeIndex + 1).filter(Boolean);
+        buffer = lines.slice(completeIndex + 1).join("\r\n");
+        const waiter = pending.shift();
+        if (waiter) waiter(responseLines.join("\n"));
+      }
+    }
+
+    function readResponse() {
+      return new Promise((resolveResponse) => {
+        pending.push(resolveResponse);
+        drainResponses();
+      });
+    }
+
+    async function expect(codes, command) {
+      if (command) socket.write(`${command}\r\n`);
+      const response = await readResponse();
+      const code = Number(response.slice(0, 3));
+      const allowed = Array.isArray(codes) ? codes : [codes];
+      if (!allowed.includes(code)) {
+        throw new Error(`smtp_unexpected_response:${code}:${response.slice(0, 500)}`);
+      }
+      return response;
+    }
+
+    async function run() {
+      await expect(220);
+      await expect(250, `EHLO ${smtpClientName()}`);
+      if (!secure) {
+        await expect(220, "STARTTLS");
+        throw new Error("smtp_starttls_not_supported_use_smtp_secure_true");
+      }
+      await expect(334, "AUTH LOGIN");
+      await expect(334, Buffer.from(username).toString("base64"));
+      await expect(235, Buffer.from(password).toString("base64"));
+      await expect(250, `MAIL FROM:<${emailAddressOnly(from)}>`);
+      await expect([250, 251], `RCPT TO:<${emailAddressOnly(to)}>`);
+      await expect(354, "DATA");
+      socket.write(`${buildPlainTextMime({ from, replyTo, to, subject, text, messageId })}\r\n.\r\n`);
+      await expect(250);
+      socket.write("QUIT\r\n");
+      socket.end();
+      resolve({ messageId });
+    }
+
+    run().catch((error) => {
+      socket.destroy();
+      reject(error);
+    });
+  });
+}
+
+function buildPlainTextMime({ from, replyTo, to, subject, text, messageId }) {
+  const headers = [
+    `From: ${sanitizeHeader(from)}`,
+    `To: ${sanitizeHeader(to)}`,
+    replyTo ? `Reply-To: ${sanitizeHeader(replyTo)}` : "",
+    `Subject: ${encodeHeader(subject || "")}`,
+    `Message-ID: ${messageId}`,
+    "MIME-Version: 1.0",
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: 8bit"
+  ].filter(Boolean);
+  return `${headers.join("\r\n")}\r\n\r\n${escapeSmtpBody(text || "")}`;
+}
+
+function escapeSmtpBody(value) {
+  return String(value || "")
+    .replace(/\r?\n/g, "\r\n")
+    .replace(/^\./gm, "..");
+}
+
+function sanitizeHeader(value) {
+  return String(value || "").replace(/[\r\n]+/g, " ").trim();
+}
+
+function encodeHeader(value) {
+  const header = sanitizeHeader(value);
+  return /^[\x00-\x7F]*$/.test(header)
+    ? header
+    : `=?UTF-8?B?${Buffer.from(header, "utf8").toString("base64")}?=`;
+}
+
+function emailAddressOnly(value) {
+  const raw = String(value || "").trim();
+  const bracketMatch = raw.match(/<([^>]+)>/);
+  return (bracketMatch ? bracketMatch[1] : raw).trim();
+}
+
+function smtpClientName() {
+  try {
+    return new URL(config.publicBaseUrl).hostname || "arcovia.africa";
+  } catch {
+    return "arcovia.africa";
+  }
+}
+
+function isResendDomainRestriction(detail) {
+  const text = String(detail || "").toLowerCase();
+  return text.includes("verify a domain")
+    || text.includes("domain is not verified")
+    || text.includes("only send testing emails")
+    || text.includes("resend.dev")
+    || text.includes("403");
+}
+
+function safeReason(value) {
+  return String(value || "")
+    .replace(/re_[A-Za-z0-9_-]+/g, "[redacted-resend-key]")
+    .replace(/sk-[A-Za-z0-9_-]+/g, "[redacted-api-key]")
+    .slice(0, 500);
 }
 
 function getUnsafeCustomerEmailReason({ subject, text }) {

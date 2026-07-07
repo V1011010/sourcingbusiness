@@ -33,9 +33,23 @@ export const config = {
   openaiReasoningEffort: process.env.OPENAI_REASONING_EFFORT || "low",
   openaiWebSearchContextSize: process.env.OPENAI_WEB_SEARCH_CONTEXT_SIZE || "high",
   resendApiKey: process.env.RESEND_API_KEY || "",
+  emailProvider: (process.env.EMAIL_PROVIDER || "auto").toLowerCase(),
   fromEmail: process.env.FROM_EMAIL || "Arcovia <updates@arcovia.africa>",
+  resendTestFromEmail: process.env.RESEND_TEST_FROM_EMAIL || "Arcovia <onboarding@resend.dev>",
   replyToEmail: process.env.REPLY_TO_EMAIL || process.env.REPLY_TO || "arcovia.africa@gmail.com",
   adminEmail: process.env.ADMIN_EMAIL || "vutlharingobeni5@gmail.com",
+  emailAdminRelayOnFailure: process.env.EMAIL_ADMIN_RELAY_ON_FAILURE === undefined
+    ? true
+    : ["1", "true", "yes", "on"].includes(String(process.env.EMAIL_ADMIN_RELAY_ON_FAILURE || "").toLowerCase()),
+  emailOutboxCountsAsSent: ["1", "true", "yes", "on"].includes(String(process.env.EMAIL_OUTBOX_COUNTS_AS_SENT || "").toLowerCase()),
+  smtpHost: process.env.SMTP_HOST || "",
+  smtpPort: Number(process.env.SMTP_PORT || 465),
+  smtpSecure: process.env.SMTP_SECURE === undefined
+    ? true
+    : ["1", "true", "yes", "on"].includes(String(process.env.SMTP_SECURE || "").toLowerCase()),
+  smtpUser: process.env.SMTP_USER || process.env.GMAIL_USER || "",
+  smtpPassword: process.env.SMTP_PASSWORD || process.env.GMAIL_APP_PASSWORD || "",
+  smtpFromEmail: process.env.SMTP_FROM_EMAIL || process.env.GMAIL_FROM_EMAIL || process.env.FROM_EMAIL || "Arcovia <arcovia.africa@gmail.com>",
   adminStatusSecret: process.env.ARCOVIA_ADMIN_STATUS_SECRET || "",
   dataDir: process.env.ARCOVIA_DATA_DIR || process.env.DATA_DIR || "data",
   allowTemporaryPaymentStorage: ["1", "true", "yes", "on"].includes(String(process.env.ARCOVIA_ALLOW_TEMP_PAYMENT_STORAGE || "").toLowerCase()),

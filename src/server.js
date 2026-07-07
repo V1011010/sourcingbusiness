@@ -44,6 +44,13 @@ const server = http.createServer(async (req, res) => {
           customerSupplierChoiceCapture: true,
           resendDefaultSenderFallback: false,
           resendStrictVerifiedSender: true,
+          emailProvider: config.emailProvider,
+          emailResendConfigured: Boolean(config.resendApiKey),
+          emailSmtpConfigured: Boolean(config.smtpHost && config.smtpUser && config.smtpPassword),
+          emailSmtpHost: config.smtpHost || null,
+          emailAdminRelayOnFailure: config.emailAdminRelayOnFailure,
+          emailOutboxCountsAsSent: config.emailOutboxCountsAsSent,
+          resendTestFromEmailEnabled: Boolean(config.resendApiKey && config.resendTestFromEmail),
           resendReplyToAddress: Boolean(config.replyToEmail),
           finalPaymentWorkflow: true,
           finalPaymentStorageReady: isFinalPaymentStorageReady(),
@@ -1819,7 +1826,7 @@ function emailLogPanel(emailLog = []) {
     <td>${escapeHtml(formatEventTime(entry.at))}</td>
     <td>${escapeHtml(entry.audience || "")}</td>
     <td>${escapeHtml(entry.templateName || "")}<br><span class="muted">${escapeHtml(entry.subject || "")}</span></td>
-    <td class="${entry.ok ? "email-ok" : "email-fail"}">${escapeHtml(entry.ok ? "sent" : entry.blocked ? "blocked" : entry.skipped ? "skipped" : "failed")}</td>
+    <td class="${entry.ok ? "email-ok" : "email-fail"}">${escapeHtml(entry.ok ? "sent" : entry.relayed ? "relayed" : entry.blocked ? "blocked" : entry.skipped ? "skipped" : "failed")}</td>
     <td>${escapeHtml(entry.reason || "")}</td>
   </tr>`).join("");
   return `<details class="email-log">

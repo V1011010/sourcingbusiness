@@ -77,6 +77,7 @@ export function recordEmailAudit(job, message) {
     subject: message?.subject || "",
     ok: Boolean(result.ok),
     blocked: Boolean(result.blocked),
+    relayed: Boolean(result.relayed),
     dryRun: Boolean(result.dryRun),
     skipped: Boolean(result.skipped),
     reason: String(result.reason || ""),

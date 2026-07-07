@@ -39,12 +39,32 @@ services:
         value: high
       - key: RESEND_API_KEY
         sync: false
+      - key: EMAIL_PROVIDER
+        value: auto
       - key: FROM_EMAIL
         value: Arcovia <updates@arcovia.africa>
+      - key: RESEND_TEST_FROM_EMAIL
+        value: Arcovia <onboarding@resend.dev>
       - key: REPLY_TO_EMAIL
         value: arcovia.africa@gmail.com
       - key: ADMIN_EMAIL
         value: vutlharingobeni5@gmail.com
+      - key: EMAIL_ADMIN_RELAY_ON_FAILURE
+        value: "true"
+      - key: EMAIL_OUTBOX_COUNTS_AS_SENT
+        value: "false"
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "465"
+      - key: SMTP_SECURE
+        value: "true"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM_EMAIL
+        value: Arcovia <arcovia.africa@gmail.com>
       - key: PAYFAST_MERCHANT_ID
         sync: false
       - key: PAYFAST_MERCHANT_KEY
