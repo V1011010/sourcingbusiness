@@ -140,10 +140,11 @@ By default, this app stores jobs in `data/jobs.json`. That is fine locally, but 
 
 For Render production use:
 
-1. Add a persistent disk to the web service.
-2. Use a mount path such as `/var/data`.
-3. Set the Render environment variable `ARCOVIA_DATA_DIR=/var/data`.
-4. Redeploy.
+1. Use the checked-in `render.yaml` Blueprint, which declares a persistent disk named `arcovia-data`.
+2. The disk mount path is `/var/data`.
+3. `ARCOVIA_DATA_DIR=/var/data` is set in the Blueprint.
+4. If Render does not apply the Blueprint disk automatically to the existing service, add the disk manually from the Render service's Disks page with the same mount path.
+5. Redeploy.
 
 After that, `/health` will show `features.storage.dataDirConfigured: true`.
 

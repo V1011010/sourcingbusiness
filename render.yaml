@@ -4,6 +4,10 @@ services:
     runtime: node
     startCommand: node src/server.js
     healthCheckPath: /health
+    disk:
+      name: arcovia-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: NODE_VERSION
         value: 24.14.0
@@ -20,7 +24,7 @@ services:
       - key: ARCOVIA_ADMIN_STATUS_SECRET
         sync: false
       - key: ARCOVIA_DATA_DIR
-        sync: false
+        value: /var/data
       - key: ARCOVIA_ALLOW_TEMP_PAYMENT_STORAGE
         value: "false"
       - key: OPENAI_API_KEY
