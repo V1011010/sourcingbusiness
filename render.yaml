@@ -54,7 +54,7 @@ services:
       - key: EMAIL_OUTBOX_COUNTS_AS_SENT
         value: "false"
       - key: SMTP_HOST
-        value: smtp.gmail.com
+        value: email-smtp.eu-west-1.amazonaws.com
       - key: SMTP_PORT
         value: "465"
       - key: SMTP_SECURE
@@ -64,7 +64,11 @@ services:
       - key: SMTP_PASSWORD
         sync: false
       - key: SMTP_FROM_EMAIL
-        value: Arcovia <arcovia.africa@gmail.com>
+        value: Arcovia <updates@arcovia.africa>
+      - key: AWS_SES_REGION
+        value: eu-west-1
+      - key: AWS_SES_DOMAIN
+        value: arcovia.africa
       - key: PAYFAST_MERCHANT_ID
         sync: false
       - key: PAYFAST_MERCHANT_KEY

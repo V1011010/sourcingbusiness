@@ -56,8 +56,8 @@ Fill in `.env`:
 - `PUBLIC_BASE_URL`
 - `ARCOVIA_FLOW_SECRET`
 - `RESEND_API_KEY` if you want real emails through Resend
-- `EMAIL_PROVIDER=auto` tries Gmail SMTP first when configured, then Resend
-- `SMTP_USER` and `SMTP_PASSWORD` let the backend send through Gmail SMTP with a Google App Password as a temporary free fallback
+- `EMAIL_PROVIDER=auto` tries SMTP first when credentials are configured, then falls back to Resend/admin relay
+- `SMTP_USER` and `SMTP_PASSWORD` are required for Amazon SES SMTP credentials
 - `EMAIL_ADMIN_RELAY_ON_FAILURE=true` copies safe customer emails to admin when Resend blocks customer delivery because the sender domain is not verified
 - `ADMIN_EMAIL`
 - `DEEP_RESEARCH_MAX_ATTEMPTS` defaults to `3`; the current worker policy is fixed at 3 completed deep research passes total
@@ -163,6 +163,60 @@ How it works:
 Keep the PC awake, online, and signed in. If the local session logs out or the PC sleeps, new research jobs wait until the worker is running again.
 
 Customer email delivery is still handled by the backend email system, not by free-form Codex drafting. That is intentional: automatic customer emails must pass the customer-safety guard before sending. Codex/Gmail can be used manually from a Codex session to create or send a reviewed message, but the live automation should use Resend, Gmail SMTP, or another real mail API for automatic delivery.
+
+## Amazon SES email setup
+
+Amazon SES is the recommended production email provider for Arcovia because it is cheap, reliable, and works through the SMTP sender already built into this backend.
+
+Recommended SES region: `eu-west-1` / Europe Ireland.
+
+Reason: AWS lists SES SMTP endpoints by region, and the Cape Town region does not currently have SMTP endpoints. Use:
+
+```env
+EMAIL_PROVIDER=auto
+SMTP_HOST=email-smtp.eu-west-1.amazonaws.com
+SMTP_PORT=465
+SMTP_SECURE=true
+SMTP_FROM_EMAIL=Arcovia <updates@arcovia.africa>
+REPLY_TO_EMAIL=arcovia.africa@gmail.com
+AWS_SES_REGION=eu-west-1
+AWS_SES_DOMAIN=arcovia.africa
+```
+
+Then add the SES SMTP credentials in Render:
+
+```env
+SMTP_USER=your-ses-smtp-username
+SMTP_PASSWORD=your-ses-smtp-password
+```
+
+Do not use normal AWS access keys as the SMTP password. Amazon SES SMTP credentials are separate from normal AWS access keys.
+
+### AWS console steps
+
+1. Open AWS SES in region `Europe (Ireland) eu-west-1`.
+2. Go to Configuration → Identities.
+3. Create identity → Domain.
+4. Enter `arcovia.africa`.
+5. Enable Easy DKIM.
+6. Copy the DNS records SES gives you.
+7. Add those DNS records wherever your domain DNS is hosted. Public DNS currently shows `arcovia.africa` using Google DNS nameservers: `ns-cloud-a1.googledomains.com` through `ns-cloud-a4.googledomains.com`.
+8. Wait until SES shows the domain identity as verified.
+9. Go to SES → SMTP settings.
+10. Create SMTP credentials.
+11. Put the SMTP username/password into Render as `SMTP_USER` and `SMTP_PASSWORD`.
+12. Request production access to move SES out of sandbox.
+
+Until production access is approved, SES sandbox can only send to verified recipient addresses. After production access is approved, SES can send to any customer address, but the From domain still must stay verified.
+
+Optional AWS CLI start, once AWS CLI is installed and logged in:
+
+```powershell
+aws sesv2 create-email-identity --region eu-west-1 --email-identity arcovia.africa
+aws sesv2 get-email-identity --region eu-west-1 --email-identity arcovia.africa
+```
+
+The second command returns DKIM tokens/records to add in DNS. Create SMTP credentials from the SES console under SMTP settings, then add them to Render as `SMTP_USER` and `SMTP_PASSWORD`.
 
 ## Temporary email fallback
 
