@@ -40,7 +40,7 @@ services:
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_PROVIDER
-        value: auto
+        value: smtp
       - key: FROM_EMAIL
         value: Arcovia <updates@arcovia.africa>
       - key: RESEND_TEST_FROM_EMAIL

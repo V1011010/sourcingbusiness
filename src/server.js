@@ -1,7 +1,7 @@
 import http from "node:http";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { config } from "./config.js";
-import { sendCustomerEmail, sendEmail, sendSensitiveAdminEmailForJob } from "./email.js";
+import { emailDiagnostics, sendCustomerEmail, sendEmail, sendSensitiveAdminEmailForJob } from "./email.js";
 import { amountsMatch, buildPayfastCheckoutFields, formatPayfastAmount, parsePayfastBody, payfastConfigured, payfastProcessUrl, verifyPayfastSignature } from "./payfast.js";
 import { isResearchRunning, queueDueResearchAttempts, queueResearch, researchPolicySummary } from "./research.js";
 import { handleLocalWorkerClaim, handleLocalWorkerReport, localWorkerHealthFeatures } from "./local-worker.js";
@@ -15,6 +15,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/health") {
       const researchPolicy = researchPolicySummary();
+      const email = emailDiagnostics();
       return json(res, 200, {
         ok: true,
         service: "arcovia-sourcing",
@@ -44,14 +45,24 @@ const server = http.createServer(async (req, res) => {
           customerSupplierChoiceCapture: true,
           resendDefaultSenderFallback: false,
           resendStrictVerifiedSender: true,
-          emailProvider: config.emailProvider,
-          emailResendConfigured: Boolean(config.resendApiKey),
-          emailSmtpConfigured: Boolean(config.smtpHost && config.smtpUser && config.smtpPassword),
-          emailSmtpHost: config.smtpHost || null,
-          emailAdminRelayOnFailure: config.emailAdminRelayOnFailure,
-          emailOutboxCountsAsSent: config.emailOutboxCountsAsSent,
+          emailProvider: email.provider,
+          emailReady: email.ready,
+          emailActiveProviderPlan: email.activeProviderPlan,
+          emailIssues: email.issues,
+          emailActiveFromEmail: email.activeFromEmail,
+          emailSenderDomain: email.senderDomain,
+          emailResendConfigured: email.resendConfigured,
+          emailSmtpConfigured: email.smtpConfigured,
+          emailSmtpHost: email.smtpHost,
+          emailSmtpPort: email.smtpPort,
+          emailSmtpSecure: email.smtpSecure,
+          emailSmtpFromEmail: email.smtpFromEmail,
+          emailAwsSesRegion: email.awsSesRegion,
+          emailAwsSesDomain: email.awsSesDomain,
+          emailAdminRelayOnFailure: email.adminRelayOnFailure,
+          emailOutboxCountsAsSent: email.outboxCountsAsSent,
           resendTestFromEmailEnabled: Boolean(config.resendApiKey && config.resendTestFromEmail),
-          resendReplyToAddress: Boolean(config.replyToEmail),
+          resendReplyToAddress: email.replyToConfigured,
           finalPaymentWorkflow: true,
           finalPaymentStorageReady: isFinalPaymentStorageReady(),
           payfastConfigured: payfastConfigured(),
@@ -70,6 +81,10 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/admin/jobs") {
       return handleAdminJobs(req, res, url);
+    }
+
+    if (req.method === "POST" && url.pathname === "/admin/email-test") {
+      return handleAdminEmailTest(req, res, url);
     }
 
     if (req.method === "POST" && url.pathname === "/local-worker/claim") {
@@ -391,11 +406,8 @@ function mergeLineItems(payloadItems, shopifyItems) {
 }
 
 function handleAdminJobs(req, res, url) {
-  const validAdminSecret = config.adminStatusSecret && req.headers["x-arcovia-admin-secret"] === config.adminStatusSecret;
-  const validFlowSecret = config.flowSecret && req.headers["x-arcovia-flow-secret"] === config.flowSecret;
-
   if (!config.adminStatusSecret && !config.flowSecret) return json(res, 404, { error: "not_found" });
-  if (!validAdminSecret && !validFlowSecret) {
+  if (!isAuthorizedAdminRequest(req, url)) {
     return json(res, 401, { error: "invalid_admin_secret" });
   }
 
@@ -403,6 +415,38 @@ function handleAdminJobs(req, res, url) {
   const jobs = readJobs().map((job) => serializeJob(job, details));
 
   json(res, 200, { ok: true, jobs });
+}
+
+async function handleAdminEmailTest(req, res, url) {
+  if (!config.adminStatusSecret && !config.flowSecret) return json(res, 404, { error: "not_found" });
+  if (!isAuthorizedAdminRequest(req, url)) {
+    return json(res, 401, { error: "invalid_admin_secret" });
+  }
+
+  const diagnostics = emailDiagnostics();
+  const result = await sendEmail({
+    to: config.adminEmail,
+    subject: "Arcovia email test",
+    text: `Arcovia email test\n\nThis confirms the backend can send email through the configured production provider.\n\nProvider setting: ${diagnostics.provider}\nActive provider plan: ${diagnostics.activeProviderPlan.join(", ") || "none"}\nSMTP host: ${diagnostics.smtpHost || "not configured"}\nFrom: ${diagnostics.activeFromEmail}\nSent at: ${new Date().toISOString()}\n\nArcovia`
+  });
+
+  return json(res, result.ok ? 200 : 502, {
+    ok: Boolean(result.ok),
+    provider: result.provider || "",
+    providerId: result.id || result.providerId || null,
+    dryRun: Boolean(result.dryRun),
+    reason: result.reason || "",
+    diagnostics: {
+      provider: diagnostics.provider,
+      ready: diagnostics.ready,
+      activeProviderPlan: diagnostics.activeProviderPlan,
+      smtpConfigured: diagnostics.smtpConfigured,
+      smtpHost: diagnostics.smtpHost,
+      smtpPort: diagnostics.smtpPort,
+      smtpSecure: diagnostics.smtpSecure,
+      issues: diagnostics.issues
+    }
+  });
 }
 
 function monitorPageStyles() {
@@ -1541,6 +1585,13 @@ function isValidMonitorKey(key) {
   );
 }
 
+function isAuthorizedAdminRequest(req, url) {
+  const key = url?.searchParams?.get("key") || "";
+  const validAdminSecret = config.adminStatusSecret && req.headers["x-arcovia-admin-secret"] === config.adminStatusSecret;
+  const validFlowSecret = config.flowSecret && req.headers["x-arcovia-flow-secret"] === config.flowSecret;
+  return Boolean(validAdminSecret || validFlowSecret || isValidMonitorKey(key));
+}
+
 function getJobByReviewToken(token) {
   if (!token) return null;
   return readJobs().find((job) => job.reviewToken === token);
@@ -1824,14 +1875,15 @@ function quoteActionForm(job, auth = {}, innerHtml = "") {
 function emailLogPanel(emailLog = []) {
   const rows = (emailLog || []).slice(-8).reverse().map((entry) => `<tr>
     <td>${escapeHtml(formatEventTime(entry.at))}</td>
-    <td>${escapeHtml(entry.audience || "")}</td>
+    <td>${escapeHtml(entry.audience || "")}<br><span class="muted">${escapeHtml(entry.to || "")}</span></td>
     <td>${escapeHtml(entry.templateName || "")}<br><span class="muted">${escapeHtml(entry.subject || "")}</span></td>
     <td class="${entry.ok ? "email-ok" : "email-fail"}">${escapeHtml(entry.ok ? "sent" : entry.relayed ? "relayed" : entry.blocked ? "blocked" : entry.skipped ? "skipped" : "failed")}</td>
+    <td>${escapeHtml(entry.provider || "")}</td>
     <td>${escapeHtml(entry.reason || "")}</td>
   </tr>`).join("");
   return `<details class="email-log">
     <summary>Email log (${escapeHtml((emailLog || []).length)})</summary>
-    ${rows ? `<table><thead><tr><th>Time</th><th>To</th><th>Template</th><th>Status</th><th>Reason</th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="muted">No email attempts recorded yet.</p>`}
+    ${rows ? `<table><thead><tr><th>Time</th><th>To</th><th>Template</th><th>Status</th><th>Provider</th><th>Reason</th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="muted">No email attempts recorded yet.</p>`}
   </details>`;
 }
 

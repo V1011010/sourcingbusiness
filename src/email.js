@@ -3,10 +3,37 @@ import tls from "node:tls";
 import { appendOutbox } from "./storage.js";
 import { config } from "./config.js";
 
+export function emailDiagnostics() {
+  const providerPlan = emailProviderPlan();
+  const activeFrom = activeFromEmail();
+  const senderAddress = emailAddressOnly(activeFrom);
+  const senderDomain = senderAddress.includes("@") ? senderAddress.split("@").pop().toLowerCase() : "";
+  return {
+    provider: config.emailProvider || "auto",
+    ready: providerPlan.length > 0,
+    activeProviderPlan: providerPlan,
+    activeFromEmail: activeFrom,
+    senderDomain,
+    replyToConfigured: Boolean(config.replyToEmail),
+    adminEmailConfigured: Boolean(config.adminEmail),
+    resendConfigured: Boolean(config.resendApiKey),
+    smtpConfigured: smtpConfigured(),
+    smtpHost: config.smtpHost || null,
+    smtpPort: config.smtpPort || null,
+    smtpSecure: config.smtpSecure,
+    smtpFromEmail: config.smtpFromEmail || null,
+    awsSesRegion: config.awsSesRegion,
+    awsSesDomain: config.awsSesDomain,
+    adminRelayOnFailure: config.emailAdminRelayOnFailure,
+    outboxCountsAsSent: config.emailOutboxCountsAsSent,
+    issues: emailConfigurationIssues({ providerPlan, senderDomain })
+  };
+}
+
 export async function sendEmail({ to, subject, text }) {
   if (!to) {
     appendOutbox({ to: "missing-recipient", subject, text, skipped: true });
-    return { ok: false, dryRun: true, reason: "missing recipient" };
+    return { ok: false, dryRun: true, provider: "none", reason: "missing recipient" };
   }
 
   const providers = emailProviderPlan();
@@ -15,6 +42,7 @@ export async function sendEmail({ to, subject, text }) {
     return {
       ok: config.emailOutboxCountsAsSent,
       dryRun: true,
+      provider: "outbox",
       reason: config.emailOutboxCountsAsSent ? "" : "no_email_provider_configured"
     };
   }
@@ -122,6 +150,30 @@ function emailProviderPlan() {
 
 function smtpConfigured() {
   return Boolean(config.smtpHost && config.smtpUser && config.smtpPassword);
+}
+
+function emailConfigurationIssues({ providerPlan, senderDomain }) {
+  const issues = [];
+  const provider = config.emailProvider || "auto";
+  if (!providerPlan.length) {
+    issues.push("no_active_email_provider");
+  }
+  if (provider === "smtp" || provider === "auto") {
+    if (!config.smtpHost) issues.push("missing_smtp_host");
+    if (!config.smtpUser) issues.push("missing_smtp_user");
+    if (!config.smtpPassword) issues.push("missing_smtp_password");
+    if (!config.smtpFromEmail) issues.push("missing_smtp_from_email");
+  }
+  if ((provider === "resend" || provider === "auto") && !config.resendApiKey && provider === "resend") {
+    issues.push("missing_resend_api_key");
+  }
+  if (provider === "smtp" && config.awsSesDomain && senderDomain && senderDomain !== config.awsSesDomain.toLowerCase()) {
+    issues.push(`smtp_from_domain_not_ses_verified_domain:${senderDomain}`);
+  }
+  if (config.emailOutboxCountsAsSent) {
+    issues.push("email_outbox_counts_as_sent_enabled");
+  }
+  return issues;
 }
 
 function activeFromEmail() {

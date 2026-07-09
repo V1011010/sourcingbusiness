@@ -80,6 +80,7 @@ export function recordEmailAudit(job, message) {
     relayed: Boolean(result.relayed),
     dryRun: Boolean(result.dryRun),
     skipped: Boolean(result.skipped),
+    provider: result.provider || "",
     reason: String(result.reason || ""),
     providerId: result.id || result.providerId || null,
     resendCount,

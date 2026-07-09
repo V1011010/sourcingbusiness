@@ -2,10 +2,12 @@
 
 SES identity created in AWS account `arcovia`, region `eu-west-1` / Europe Ireland.
 
-Current SES verification status: `PENDING`.
+Current SES verification status: `VERIFIED`.
+Current SES production access status: `APPROVED` / production access granted.
 
 These CNAME records were added in Shopify-managed DNS for `arcovia.africa` on 2026-07-08.
-Public DNS resolves all three records, but AWS SES still showed `Verification pending` immediately after setup.
+Public DNS resolves all three records and AWS SES has verified the domain identity.
+The SES production access request was submitted on 2026-07-08. The user reported AWS approval on 2026-07-10.
 
 | Type | Name | Value |
 | --- | --- | --- |
@@ -20,4 +22,4 @@ Authoritative DNS currently reports Shopify/Google-hosted nameservers:
 - `ns-cloud-a3.googledomains.com`
 - `ns-cloud-a4.googledomains.com`
 
-AWS will verify the SES identity after SES refreshes its verification checks.
+After approval, create SES SMTP credentials and add them to Render as `SMTP_USER` and `SMTP_PASSWORD`, with `EMAIL_PROVIDER=smtp`, before relying on live customer email traffic.

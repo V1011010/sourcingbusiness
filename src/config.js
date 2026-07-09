@@ -50,6 +50,8 @@ export const config = {
   smtpUser: process.env.SMTP_USER || process.env.GMAIL_USER || "",
   smtpPassword: process.env.SMTP_PASSWORD || process.env.GMAIL_APP_PASSWORD || "",
   smtpFromEmail: process.env.SMTP_FROM_EMAIL || process.env.GMAIL_FROM_EMAIL || process.env.FROM_EMAIL || "Arcovia <updates@arcovia.africa>",
+  awsSesRegion: process.env.AWS_SES_REGION || "eu-west-1",
+  awsSesDomain: process.env.AWS_SES_DOMAIN || "arcovia.africa",
   adminStatusSecret: process.env.ARCOVIA_ADMIN_STATUS_SECRET || "",
   dataDir: process.env.ARCOVIA_DATA_DIR || process.env.DATA_DIR || "data",
   allowTemporaryPaymentStorage: ["1", "true", "yes", "on"].includes(String(process.env.ARCOVIA_ALLOW_TEMP_PAYMENT_STORAGE || "").toLowerCase()),
