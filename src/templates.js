@@ -24,9 +24,14 @@ export function depositReceived(job) {
 
 We received your R250 sourcing deposit and the sourcing process has started.
 
-Current stage: searching for possible suppliers and product matches.
+Current stage: building the sourcing route and checking possible matches.
 
-We will update you regularly as we search, review suppliers, and check trust signals.
+What happens next:
+1. Arcovia searches online stores, marketplaces, physical-store leads, suppliers, manufacturers, and delivery routes.
+2. Unsafe or weak sources are filtered out using reviews, complaint signals, website/payment risk, delivery proof, and product-match quality.
+3. If approved options pass checks, you receive a private options link showing anonymous Supplier 1, Supplier 2, etc.
+4. After you choose an option, Arcovia confirms the live final amount before asking for the balance payment.
+5. The supplier order is placed only after the final payment is confirmed and Arcovia completes the final owner check.
 
 Track the status here:
 ${statusLink(job)}
@@ -49,7 +54,7 @@ ${briefLink(job)}
 You can track the status here:
 ${statusLink(job)}
 
-Please include your contact details, item category, exact item name, condition, budget, and any category-specific details, reference links, or photos.
+Please include your contact details, item category, exact item/service/factory/fabric need, condition or preference, budget, and any category-specific details, reference links, or photos.
 
 Arcovia`
   };
@@ -69,7 +74,7 @@ We found ${suppliers.length} approved option${suppliers.length === 1 ? "" : "s"}
 You can view the approved options, prices, and product pictures here:
 ${customerOptionsLink(job)}
 
-Choose the option you prefer. Arcovia will still confirm final availability, delivery, and the final quote before any purchase is made.
+Choose the option you prefer. The prices shown at this stage are estimates from the sourcing checks. Arcovia will still confirm live availability, delivery, duties/import handling where relevant, and the final quote before any purchase is made.
 
 Order: ${job.orderName}
 
@@ -112,7 +117,7 @@ Quote expires: ${formatQuoteExpiry(quote.expiresAt)}
 You can review the quote and pay securely here:
 ${quoteLink(job)}
 
-Once payment has been confirmed, Arcovia will prepare the order. You will receive another confirmation after the order has been placed.
+This final quote is based on the live confirmation completed for your selected option. Once payment has been confirmed through the payment notification, Arcovia will prepare the supplier order. You will receive another confirmation after the order has been placed.
 
 Order: ${job.orderName}
 
@@ -127,7 +132,7 @@ export function customerFinalPaymentReceived(job) {
 
 Your final payment has been confirmed.
 
-Arcovia will now prepare the order. You will receive another confirmation once the item order has been placed.
+Arcovia will now complete the final owner check and prepare the supplier order. You will receive another confirmation once the item order has been placed.
 
 Track the status here:
 ${statusLink(job)}
@@ -153,6 +158,8 @@ Your item order has been placed.
 ${order.orderReference ? `Order reference: ${order.orderReference}` : ""}
 ${order.eta ? `Estimated arrival: ${order.eta}` : ""}
 ${trackingLine}
+
+Arcovia will update the status page as tracking, transit, and delivery information becomes available.
 
 Track the status here:
 ${statusLink(job)}
@@ -232,11 +239,11 @@ Confirm one final time in the supplier checkout, place the order, then update Ar
 export function stageUpdate(job) {
   const status = job.status || "researching";
   const stageMessages = {
-    awaiting_brief: "We are waiting for your product brief so we can begin the supplier search.",
-    researching: "We are still searching across online stores, physical stores, marketplaces, suppliers, distributors, reviews, complaint sites, social signals, and shipping options.",
+    awaiting_brief: "We are waiting for your product brief so we can begin the sourcing process.",
+    researching: "We are still searching across online stores, physical-store leads, marketplaces, suppliers, distributors, manufacturers, service providers, reviews, complaint sites, social signals, and shipping options.",
     vetting: "We have found possible suppliers and are checking authenticity, reviews, complaint history, and social presence.",
     human_review: "Supplier options are under Arcovia review. When the approved shortlist is complete, you will receive a private options link to choose from.",
-    supplier_selected: "Arcovia has selected a supplier/source for internal follow-up. We will confirm the final quote and next steps before any purchase is made.",
+    supplier_selected: "An option is being checked for final availability, delivery, and price confirmation. We will confirm the final quote before any purchase is made.",
     customer_selected_option: "We received your preferred option. Arcovia is confirming live availability and the final total before sending the payment link.",
     quote_verifying: "Arcovia is confirming live availability, delivery, and the final total for your chosen option.",
     quote_ready: "Your sourcing result is ready. Arcovia will contact you with the quote and next steps.",

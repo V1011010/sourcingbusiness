@@ -2681,7 +2681,7 @@ async function handleBriefSubmit(req, res, token) {
   upsertJob(job);
 
   if (!config.localCodexWorkerEnabled) queueResearch(job.id);
-  html(res, 200, "<h1>Brief received</h1><p>Arcovia has started the supplier search. You will receive updates by email.</p>");
+  html(res, 200, briefReceivedHtml(job));
 }
 
 async function handleStatusPage(_req, res, token) {
@@ -2694,6 +2694,7 @@ async function handleStatusPage(_req, res, token) {
     ? `<section><h2>Research review</h2><p class="muted">Arcovia is reviewing the sourcing results before any final quote or next payment step is confirmed.</p></section>`
     : "";
   const progress = researchProgressHtml(job);
+  const workflow = customerWorkflowHtml(job);
 
   html(res, 200, `<!doctype html>
 <html>
@@ -2701,24 +2702,56 @@ async function handleStatusPage(_req, res, token) {
   <title>Arcovia sourcing status</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: Arial, sans-serif; background:#080406; color:#fff; margin:0; padding:24px; }
-    main { max-width:760px; margin:0 auto; background:#16080d; border:1px solid #6b1024; padding:24px; border-radius:16px; }
-    h1 { margin-top:0; }
-    .badge { display:inline-block; margin:8px 0 18px; padding:8px 12px; border-radius:999px; background:#7a1028; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
-    .muted { color:#d8b8c0; line-height:1.5; }
+    :root { color-scheme: dark; --bg:#070307; --panel:#170911; --panel2:#210d16; --line:#7b1930; --accent:#ffcf5f; --pink:#ffced8; --text:#fff8f0; --muted:#dfbdc5; }
+    * { box-sizing:border-box; }
+    body { font-family: Inter, Arial, sans-serif; background:radial-gradient(circle at 20% 0%, #5a1020 0, transparent 34%), linear-gradient(135deg, #090306 0%, #13070d 46%, #250b16 100%); color:var(--text); margin:0; padding:24px; }
+    main { max-width:980px; margin:0 auto; }
+    .shell { background:rgba(23,9,17,.9); border:1px solid rgba(255,255,255,.14); box-shadow:0 24px 80px rgba(0,0,0,.36); padding:clamp(20px,4vw,36px); border-radius:28px; }
+    h1 { margin:0; font-size:clamp(32px,7vw,70px); line-height:.92; letter-spacing:-.06em; text-transform:uppercase; }
+    h2 { margin:0 0 12px; text-transform:uppercase; letter-spacing:-.03em; }
+    .eyebrow { color:var(--accent); font-weight:900; text-transform:uppercase; letter-spacing:.16em; font-size:12px; margin:0 0 12px; }
+    .badge { display:inline-flex; margin:18px 0; padding:9px 13px; border-radius:999px; background:#8f1631; border:1px solid rgba(255,255,255,.18); font-weight:900; text-transform:uppercase; letter-spacing:.05em; font-size:12px; }
+    .muted { color:var(--muted); line-height:1.6; }
+    .meta { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; margin:20px 0; }
+    .meta div, section { background:rgba(255,255,255,.055); border:1px solid rgba(255,255,255,.12); border-radius:18px; padding:16px; }
+    .workflow { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin:18px 0; }
+    .step { position:relative; min-height:150px; background:linear-gradient(145deg, rgba(255,255,255,.095), rgba(255,255,255,.035)); border:1px solid rgba(255,255,255,.12); border-radius:22px; padding:18px; overflow:hidden; }
+    .step::after { content:""; position:absolute; inset:auto -30px -40px auto; width:110px; height:110px; border-radius:999px; background:rgba(255,207,95,.1); }
+    .step b { display:block; color:var(--accent); font-size:12px; text-transform:uppercase; letter-spacing:.14em; margin-bottom:10px; }
+    .step h3 { margin:0 0 8px; font-size:18px; text-transform:uppercase; }
+    .step.done { border-color:rgba(255,207,95,.42); }
+    .step.active { background:linear-gradient(145deg, rgba(143,22,49,.9), rgba(52,13,25,.86)); border-color:var(--accent); box-shadow:0 18px 60px rgba(255,207,95,.08); }
+    .step.upcoming { opacity:.72; }
+    .policy-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin-top:14px; }
+    .policy-grid div { background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.1); border-radius:18px; padding:14px; }
     ul { padding-left:22px; }
-    li { margin:0 0 16px; line-height:1.45; }
-    a { color:#ffc4d0; }
+    li { margin:0 0 14px; line-height:1.5; }
+    a { color:var(--pink); font-weight:800; }
   </style>
 </head>
 <body>
-  <main>
+  <main class="shell">
+    <p class="eyebrow">Private sourcing tracker</p>
     <h1>Arcovia sourcing status</h1>
     <div class="badge">${escapeHtml(statusLabel(job.status))}</div>
-    <p class="muted">Order: ${escapeHtml(job.orderName)}<br>Created: ${escapeHtml(formatEventTime(job.createdAt))}<br>Sourcing window ends: ${escapeHtml(formatEventTime(job.sourcingWindowEndsAt))}</p>
+    <div class="meta">
+      <div><strong>Order</strong><br><span class="muted">${escapeHtml(job.orderName)}</span></div>
+      <div><strong>Created</strong><br><span class="muted">${escapeHtml(formatEventTime(job.createdAt))}</span></div>
+      <div><strong>Policy window</strong><br><span class="muted">Up to 14 days to find or complete a valid online source.</span></div>
+    </div>
+    ${workflow}
     ${progress}
     ${job.status === "awaiting_brief" ? `<p><a href="${escapeHtml(briefLinkForStatus(job))}">Complete your product brief</a> so the sourcing process can start.</p>` : ""}
     ${researchSummary}
+    <section>
+      <h2>How payment and ordering works</h2>
+      <div class="policy-grid">
+        <div><strong>Deposit</strong><p class="muted">The R250 deposit starts the sourcing process. It is refundable if Arcovia cannot find or complete a valid online source.</p></div>
+        <div><strong>Options</strong><p class="muted">Approved options are shown anonymously. Supplier names, websites, and internal checks stay private.</p></div>
+        <div><strong>Final quote</strong><p class="muted">After you choose an option, Arcovia confirms live availability, delivery, and the final rand total before requesting the balance.</p></div>
+        <div><strong>Ordering</strong><p class="muted">The supplier order is placed after final payment is confirmed and Arcovia completes the final owner check.</p></div>
+      </div>
+    </section>
     <h2>Timeline</h2>
     <ul>${timeline || "<li>No timeline entries yet.</li>"}</ul>
   </main>
@@ -2819,6 +2852,137 @@ function scriptJson(value) {
 
 function briefLinkForStatus(job) {
   return `${config.publicBaseUrl.replace(/\/$/, "")}/brief/${job.publicToken}`;
+}
+
+function briefReceivedHtml(job) {
+  return `<!doctype html>
+<html>
+<head>
+  <title>Arcovia brief received</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { color-scheme: dark; --bg:#070307; --panel:#180911; --line:#7b1930; --accent:#ffcf5f; --pink:#ffced8; --muted:#dfbdc5; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; font-family:Inter, Arial, sans-serif; color:#fff8f0; background:radial-gradient(circle at 18% 0%, #6f1428 0, transparent 32%), linear-gradient(135deg, #080306, #170811 52%, #2a0d18); padding:24px; display:grid; place-items:center; }
+    main { width:min(960px,100%); background:rgba(24,9,17,.9); border:1px solid rgba(255,255,255,.14); border-radius:30px; padding:clamp(22px,5vw,42px); box-shadow:0 24px 80px rgba(0,0,0,.38); }
+    h1 { margin:0; font-size:clamp(34px,8vw,78px); line-height:.9; letter-spacing:-.06em; text-transform:uppercase; }
+    h2 { margin:0 0 10px; text-transform:uppercase; }
+    p { color:var(--muted); line-height:1.6; }
+    .eyebrow { color:var(--accent); font-size:12px; text-transform:uppercase; letter-spacing:.16em; font-weight:900; margin:0 0 12px; }
+    .steps { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; margin:22px 0; }
+    .step { background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12); border-radius:20px; padding:16px; min-height:132px; }
+    .step b { color:var(--accent); font-size:12px; letter-spacing:.12em; }
+    .actions { display:flex; flex-wrap:wrap; gap:12px; margin-top:20px; }
+    a { color:#14070d; background:var(--accent); text-decoration:none; border-radius:999px; padding:12px 18px; font-weight:900; text-transform:uppercase; letter-spacing:.04em; }
+    a.secondary { color:#fff8f0; background:transparent; border:1px solid rgba(255,255,255,.24); }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">Brief received</p>
+    <h1>Your sourcing process has started.</h1>
+    <p>Arcovia has received your request details. The sourcing team/system will now check realistic places to get the item, remove unsafe sources, and prepare approved options if valid sources are found.</p>
+    <div class="steps">
+      <div class="step"><b>01</b><h2>Search</h2><p>Online stores, marketplaces, physical-store leads, suppliers, distributors, and route options are checked.</p></div>
+      <div class="step"><b>02</b><h2>Verify</h2><p>Sources are filtered using reviews, complaint signals, website/payment risk, delivery proof, and product-match quality.</p></div>
+      <div class="step"><b>03</b><h2>Options</h2><p>If approved sources pass checks, you receive anonymous options with pictures and estimated prices.</p></div>
+      <div class="step"><b>04</b><h2>Quote</h2><p>After you choose an option, Arcovia confirms the final amount before the balance payment is requested.</p></div>
+    </div>
+    <div class="actions">
+      <a href="${escapeHtml(statusLinkForJob(job))}">Track status</a>
+      <a class="secondary" href="${escapeHtml(config.publicBaseUrl.replace(/\/$/, ""))}">Back to Arcovia</a>
+    </div>
+  </main>
+</body>
+</html>`;
+}
+
+function statusLinkForJob(job) {
+  return `${config.publicBaseUrl.replace(/\/$/, "")}/status/${job.publicToken}`;
+}
+
+function customerWorkflowHtml(job) {
+  const currentIndex = customerWorkflowIndex(job.status);
+  const refundState = ["refund_due", "no_online_purchase_available", "supplier_unavailable", "payment_failed", "quote_expired", "research_failed"].includes(job.status);
+  const steps = [
+    {
+      title: "Request and deposit",
+      text: "Customer pays the R250 deposit and completes the category-specific sourcing brief."
+    },
+    {
+      title: "Deep sourcing checks",
+      text: "Arcovia checks online stores, physical-store leads, suppliers, manufacturers, service providers, delivery routes, and trust signals."
+    },
+    {
+      title: "Approved options",
+      text: "Unsafe or weak sources are removed. Approved options are shown anonymously with images and estimated totals."
+    },
+    {
+      title: "Final quote",
+      text: "After the customer chooses an option, Arcovia confirms live availability, delivery, duties where relevant, and the final rand amount."
+    },
+    {
+      title: "Balance payment",
+      text: "The customer pays the final confirmed amount through the Arcovia quote link. Payment is confirmed by PayFast notification."
+    },
+    {
+      title: "Order placement",
+      text: "Arcovia performs the final owner check, places the supplier order, and records the reference."
+    },
+    {
+      title: "Tracking and delivery",
+      text: "Tracking, ETA, transit updates, and delivery confirmation are added to this private status page."
+    }
+  ];
+
+  const cards = steps.map((step, index) => {
+    const state = refundState && index > currentIndex ? "upcoming" : index < currentIndex ? "done" : index === currentIndex ? "active" : "upcoming";
+    return `<div class="step ${state}">
+      <b>${String(index + 1).padStart(2, "0")}</b>
+      <h3>${escapeHtml(step.title)}</h3>
+      <p class="muted">${escapeHtml(step.text)}</p>
+    </div>`;
+  }).join("");
+
+  const refundNotice = refundState
+    ? `<p class="muted"><strong>Current exception:</strong> this request needs Arcovia attention. If Arcovia cannot find or complete a valid online source, the R250 deposit is marked for refund processing.</p>`
+    : "";
+
+  return `<section>
+    <h2>Source-to-delivery workflow</h2>
+    <p class="muted">This is the operating flow for your request from paid deposit to final delivery.</p>
+    ${refundNotice}
+    <div class="workflow">${cards}</div>
+  </section>`;
+}
+
+function customerWorkflowIndex(status) {
+  const map = {
+    awaiting_brief: 0,
+    deposit_paid: 0,
+    researching: 1,
+    vetting: 1,
+    no_match: 1,
+    research_failed: 1,
+    human_review: 2,
+    options_sent: 2,
+    customer_selected_option: 3,
+    supplier_selected: 3,
+    quote_verifying: 3,
+    quote_ready: 4,
+    payment_pending: 4,
+    quote_expired: 4,
+    payment_failed: 4,
+    balance_paid: 5,
+    ready_to_order: 5,
+    order_placed: 6,
+    in_transit: 6,
+    delivered: 6,
+    refund_due: 1,
+    no_online_purchase_available: 1,
+    supplier_unavailable: 3
+  };
+  return map[status] ?? 1;
 }
 
 function customerTimelineMessage(event, job = {}) {
