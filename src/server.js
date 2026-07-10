@@ -71,6 +71,8 @@ const server = http.createServer(async (req, res) => {
           quotePages: true,
           payfastItnEndpoint: true,
           expandedCategoryIntake: true,
+          deliveryAddressCapture: true,
+          addressAutocompleteProxy: true,
           missingBriefFixLinks: true,
           refundDueStatus: true,
           adminJobsEndpoint: Boolean(config.adminStatusSecret || config.flowSecret),
@@ -85,6 +87,10 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/admin/email-test") {
       return handleAdminEmailTest(req, res, url);
+    }
+
+    if (req.method === "GET" && url.pathname === "/address-search") {
+      return handleAddressSearch(res, url);
     }
 
     if (req.method === "POST" && url.pathname === "/local-worker/claim") {
@@ -216,6 +222,56 @@ async function handleFlowOrderPaid(req, res) {
   json(res, 202, { ok: true, job_id: job.id, status: job.status });
 }
 
+async function handleAddressSearch(res, url) {
+  const query = String(url.searchParams.get("q") || "").trim().slice(0, 180);
+  if (query.length < 3) return addressSearchJson(res, 400, { error: "query_too_short", features: [] });
+
+  const target = new URL("https://photon.komoot.io/api/");
+  target.searchParams.set("q", query);
+  target.searchParams.set("limit", "7");
+  target.searchParams.set("lang", "en");
+
+  try {
+    const response = await fetch(target, {
+      signal: AbortSignal.timeout(7000),
+      headers: { "User-Agent": "Arcovia address search/1.0 (https://arcovia.africa)" }
+    });
+    if (!response.ok) return addressSearchJson(res, 502, { error: "address_provider_unavailable", features: [] });
+    const data = await response.json();
+    const features = (Array.isArray(data.features) ? data.features : []).slice(0, 7).map((feature) => ({
+      type: "Feature",
+      geometry: {
+        type: "Point",
+        coordinates: Array.isArray(feature?.geometry?.coordinates) ? feature.geometry.coordinates.slice(0, 2) : []
+      },
+      properties: {
+        name: feature?.properties?.name || "",
+        housenumber: feature?.properties?.housenumber || "",
+        street: feature?.properties?.street || "",
+        district: feature?.properties?.district || feature?.properties?.county || "",
+        city: feature?.properties?.city || "",
+        town: feature?.properties?.town || "",
+        village: feature?.properties?.village || "",
+        state: feature?.properties?.state || "",
+        postcode: feature?.properties?.postcode || "",
+        country: feature?.properties?.country || ""
+      }
+    }));
+    return addressSearchJson(res, 200, { features });
+  } catch {
+    return addressSearchJson(res, 502, { error: "address_provider_unavailable", features: [] });
+  }
+}
+
+function addressSearchJson(res, status, data) {
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "public, max-age=300"
+  });
+  res.end(JSON.stringify(data));
+}
+
 async function handleShopifyWebhook(req, res) {
   const rawBody = await readBody(req);
   if (!verifyShopifyWebhook(rawBody, req.headers["x-shopify-hmac-sha256"])) {
@@ -241,7 +297,8 @@ async function createJobFromOrderPayload(payload, source, options = {}) {
   const existing = readJobs().find((job) => job.orderId === orderId || job.orderName === orderName);
   const enrichedPayload = await enrichOrderPayload(payload);
   const productRequest = extractProductRequest(enrichedPayload);
-  if (existing) return updateExistingJobFromOrder(existing, enrichedPayload, productRequest, source, options);
+  const deliveryAddress = extractDeliveryAddress(enrichedPayload);
+  if (existing) return updateExistingJobFromOrder(existing, enrichedPayload, productRequest, deliveryAddress, source, options);
 
   const now = new Date();
   const job = {
@@ -254,6 +311,7 @@ async function createJobFromOrderPayload(payload, source, options = {}) {
     orderName,
     customerEmail: enrichedPayload.email || enrichedPayload.customer_email || enrichedPayload.customer?.email || "",
     customerName: enrichedPayload.customer_name || enrichedPayload.customer?.displayName || enrichedPayload.customer?.first_name || "",
+    deliveryAddress,
     productRequest,
     status: productRequest ? "researching" : "awaiting_brief",
     researchAttemptCount: 0,
@@ -313,7 +371,7 @@ async function sendAdminEmailForJob(job, templateName, template, { sensitive = f
   return result;
 }
 
-async function updateExistingJobFromOrder(existing, payload, productRequest, source, options = {}) {
+async function updateExistingJobFromOrder(existing, payload, productRequest, deliveryAddress, source, options = {}) {
   existing.reviewToken ||= safeRestoreToken(payload.review_token || payload.reviewToken) || randomUUID();
   existing.customerOptionsToken ||= safeRestoreToken(payload.customer_options_token || payload.customerOptionsToken) || randomUUID();
   existing.publicToken ||= safeRestoreToken(payload.public_token || payload.publicToken) || randomUUID();
@@ -321,6 +379,7 @@ async function updateExistingJobFromOrder(existing, payload, productRequest, sou
     ...(existing.rawOrder || {}),
     ...payload
   };
+  if (deliveryAddress) existing.deliveryAddress = deliveryAddress;
 
   if (!existing.productRequest?.trim() && productRequest) {
     existing.productRequest = productRequest;
@@ -339,10 +398,19 @@ async function updateExistingJobFromOrder(existing, payload, productRequest, sou
 
   if (options.forceResearch && existing.productRequest?.trim()) {
     existing.status = "researching";
+    existing.researchAttemptCount = 0;
+    existing.researchAttempts = [];
+    existing.research = null;
+    existing.researchCompletedAt = null;
+    existing.researchFirstFoundAt = null;
+    existing.researchFirstFoundAttempt = null;
     existing.currentResearchAttempt = null;
     existing.nextResearchAt = null;
+    existing.localWorker = null;
+    existing.refundStatus = null;
+    existing.refundReason = null;
     addTimeline(existing, "research_requeued", config.localCodexWorkerEnabled
-      ? "Sourcing worker research was force-queued from the latest paid-order payload."
+      ? "Sourcing worker research was force-queued from the latest paid-order payload with completed-pass progress reset."
       : "Supplier research was force-queued from the latest paid-order payload.");
     upsertJob(existing);
     if (!config.localCodexWorkerEnabled) queueResearch(existing.id);
@@ -1529,6 +1597,7 @@ function serializeJob(job, details = false) {
     orderName: job.orderName,
     customerEmail: job.customerEmail,
     customerName: job.customerName || "",
+    deliveryAddress: job.deliveryAddress || "",
     status: job.status,
     refundStatus: job.refundStatus || null,
     refundReason: job.refundReason || null,
@@ -2253,6 +2322,36 @@ function extractProductRequest(payload) {
     .filter((value) => value && value.toLowerCase() !== "null" && value.toLowerCase() !== "undefined")
     .join("\n")
     .trim();
+}
+
+function extractDeliveryAddress(payload) {
+  const addressObjects = [payload.delivery_address, payload.deliveryAddress, payload.shipping_address, payload.shippingAddress];
+  for (const address of addressObjects) {
+    if (!address) continue;
+    if (typeof address === "string" && address.trim()) return address.trim();
+    if (typeof address === "object") {
+      const formatted = [
+        address.address1,
+        address.address2,
+        address.city,
+        address.province || address.province_code,
+        address.zip || address.postal_code,
+        address.country
+      ].map((part) => String(part || "").trim()).filter(Boolean).join(", ");
+      if (formatted) return formatted;
+    }
+  }
+
+  const propertyNames = new Set(["delivery address", "service address", "shipping address"]);
+  for (const item of normalizeLineItems(payload)) {
+    const properties = [...(item.properties || []), ...(item.customAttributes || [])];
+    for (const property of properties) {
+      const name = String(property.name || property.key || "").trim().toLowerCase();
+      const value = String(property.value || "").trim();
+      if (propertyNames.has(name) && value) return value;
+    }
+  }
+  return "";
 }
 
 function normalizeLineItems(payload) {
