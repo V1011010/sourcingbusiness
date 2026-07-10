@@ -13,6 +13,8 @@ const baseUrl = (process.env.PUBLIC_BASE_URL || "https://sourcingbusiness.onrend
 const workerSecret = process.env.ARCOVIA_LOCAL_WORKER_SECRET || process.env.ARCOVIA_FLOW_SECRET || "";
 const pollSeconds = Math.max(15, Number(process.env.LOCAL_CODEX_WORKER_POLL_SECONDS || 60));
 const codexBin = process.env.CODEX_BIN || findCodexBin();
+const codexModel = process.env.LOCAL_CODEX_MODEL || "gpt-5.6-luna";
+const codexReasoningEffort = process.env.LOCAL_CODEX_REASONING_EFFORT || "low";
 const workerEnv = buildWorkerEnv();
 const schemaPath = resolve("scripts/codex-sourcing-schema.json");
 const runtimeDir = resolve("data/local-codex-worker");
@@ -158,9 +160,18 @@ async function runCodexAgentTeam(job, runId) {
   const settled = await runWithConcurrency(tasks, agentConcurrency);
   const successes = settled.filter((result) => result.ok).map((result) => result.value);
   const failures = settled.filter((result) => !result.ok);
+  const incomplete = successes.filter((result) => reportIndicatesIncomplete(result.report));
 
   if (!successes.length) {
     throw new Error(`All Codex sourcing agents failed: ${failures.map((failure) => failure.error?.message || failure.error).join("; ")}`.slice(0, 2000));
+  }
+
+  if (failures.some((failure) => isRetryableAgentFailure(failure.error)) || incomplete.length) {
+    const reasons = [
+      ...failures.map((failure) => failure.error?.message || failure.error),
+      ...incomplete.map((result) => `${result.profile.label} returned an incomplete report`)
+    ];
+    throw new Error(`Sourcing pass blocked before completion; retry without counting this pass: ${reasons.join("; ")}`.slice(0, 2000));
   }
 
   if (failures.length) {
@@ -238,8 +249,18 @@ function runCodex(prompt, outputPath) {
     const child = spawn(codexBin, [
       "exec",
       "-",
+      "--model",
+      codexModel,
+      "--config",
+      `model_reasoning_effort=${JSON.stringify(codexReasoningEffort)}`,
+      "--ignore-user-config",
+      "--enable",
+      "standalone_web_search",
+      "--disable",
+      "shell_tool",
       "--sandbox",
       "read-only",
+      "--ephemeral",
       "--output-schema",
       schemaPath,
       "-o",
@@ -478,13 +499,39 @@ function loadDotEnv(path) {
 }
 
 function findCodexBin() {
+  const pluginRuntime = process.env.USERPROFILE
+    ? resolve(process.env.USERPROFILE, ".codex/plugins/.plugin-appserver")
+    : "";
   const candidates = [
+    pluginRuntime && existsSync(resolve(pluginRuntime, "codex-code-mode-host.exe"))
+      ? resolve(pluginRuntime, "codex.exe")
+      : "",
     process.env.USERPROFILE ? resolve(process.env.USERPROFILE, ".codex/.sandbox-bin/codex.exe") : "",
-    process.env.USERPROFILE ? resolve(process.env.USERPROFILE, ".codex/plugins/.plugin-appserver/codex.exe") : "",
     "codex"
   ];
 
   return candidates.find((candidate) => candidate && (candidate === "codex" || existsSync(candidate))) || "codex";
+}
+
+function reportIndicatesIncomplete(report) {
+  const summary = textValue(report?.summary).toLowerCase();
+  const hasEvidence = [
+    report?.sources,
+    report?.shipping_agents,
+    report?.rejected_sources
+  ].some((items) => Array.isArray(items) && items.length > 0);
+
+  if (/do not count|could not be completed|unable to complete|failed before execution|tool (host|call|route).*?(missing|failed)|no (live )?(web|browser|shell) (access|tooling)|access is denied|could not start (powershell|the shell)|mcp startup failed/i.test(summary)) {
+    return true;
+  }
+
+  return !hasEvidence && /blocked|capacity|quota|rate limit|token limit|no jobs available|missing executable/i.test(summary);
+}
+
+function isRetryableAgentFailure(error) {
+  return /capacity|quota|rate.?limit|token|no jobs available|tool host|code-mode-host|missing.*executable|os error 2|access is denied|createprocessasuserw|mcp startup failed|temporar|timed? out|service unavailable|429|502|503|504/i.test(
+    String(error?.message || error || "")
+  );
 }
 
 function buildWorkerEnv() {

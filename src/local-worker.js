@@ -114,6 +114,19 @@ export async function handleLocalWorkerReport(req, res) {
     return json(res, 200, { ok: true, status: job.status, retry_at: job.nextResearchAt });
   }
 
+  if (localWorkerReportLooksIncomplete(body.report)) {
+    job.status = "researching";
+    job.currentResearchAttempt = null;
+    job.nextResearchAt = addMinutes(new Date(), localWorkerFailureRetryMinutes()).toISOString();
+    job.localWorker = null;
+    addTimeline(job, "local_worker_incomplete", `Sourcing research did not complete and will retry at ${formatJohannesburg(job.nextResearchAt)} without counting this pass.`, {
+      workerId,
+      attempt: attemptNumber
+    });
+    upsertJob(job);
+    return json(res, 200, { ok: true, status: job.status, retry_at: job.nextResearchAt, counted: false });
+  }
+
   const attemptResearch = await enrichResearchImages(normalizeLocalWorkerReport(body.report, attemptNumber), {
     productRequest: job.productRequest
   });
@@ -667,7 +680,25 @@ function researchRetryDelayMinutes() {
 }
 
 function localWorkerFailureRetryMinutes() {
-  return Math.max(5, Number(config.researchTechnicalRetryDelayMinutes || 15));
+  return Math.max(5, Number(config.researchTechnicalRetryDelayMinutes || 10));
+}
+
+function localWorkerReportLooksIncomplete(report) {
+  const summary = textValue(report?.summary).toLowerCase();
+  const hasEvidence = [
+    report?.sources,
+    report?.suppliers,
+    report?.candidate_sources,
+    report?.shipping_agents,
+    report?.rejected_sources,
+    report?.unsafe_sources
+  ].some((items) => Array.isArray(items) && items.length > 0);
+
+  if (/do not count|could not be completed|unable to complete|failed before execution|tool (host|call|route).*?(missing|failed)|no (live )?(web|browser|shell) (access|tooling)|access is denied|could not start (powershell|the shell)|mcp startup failed/i.test(summary)) {
+    return true;
+  }
+
+  return !hasEvidence && /blocked|capacity|quota|rate limit|token limit|no jobs available|missing executable/i.test(summary);
 }
 
 function localWorkerLeaseMinutes() {

@@ -892,7 +892,7 @@ function researchRetryDelayMinutes() {
 }
 
 function technicalRetryDelayMinutes() {
-  return Math.max(1, Number(config.researchTechnicalRetryDelayMinutes || 15));
+  return Math.max(1, Number(config.researchTechnicalRetryDelayMinutes || 10));
 }
 
 function allowedScheduleDelayMinutes(job) {

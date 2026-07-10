@@ -65,10 +65,12 @@ Fill in `.env`:
 - `DEEP_RESEARCH_CONFIRMATION_CHECKS_AFTER_FOUND` defaults to `2`; the current worker policy still completes 3 total passes rather than stopping early
 - `RESEARCH_RETRY_DELAY_MINUTES` defaults to `5`
 - `OPENAI_WEB_SEARCH_CONTEXT_SIZE` defaults to `high` for the super-deep sourcing pass
-- `RESEARCH_TECHNICAL_RETRY_DELAY_MINUTES` defaults to `15`; technical API/rate-limit errors retry quickly and do not count as one of the sourcing checks
+- `RESEARCH_TECHNICAL_RETRY_DELAY_MINUTES` defaults to `10`; technical API/rate-limit errors retry quickly and do not count as one of the sourcing checks
 - `LOCAL_CODEX_WORKER_ENABLED=true` makes the hosted backend wait for the local Codex worker instead of calling OpenAI directly
 - `LOCAL_CODEX_MULTI_AGENT_ENABLED=true` makes each local research pass run multiple focused sourcing agents
 - `LOCAL_CODEX_AGENT_CONCURRENCY=2` controls how many local Codex agents run at once
+- `LOCAL_CODEX_MODEL=gpt-5.6-luna` keeps sourcing on the lower-cost model by default
+- `LOCAL_CODEX_REASONING_EFFORT=low` keeps each sourcing-agent run token-efficient by default
 - `ARCOVIA_LOCAL_WORKER_SECRET` can be set separately; if blank, the worker uses `ARCOVIA_FLOW_SECRET`
 - `ARCOVIA_DATA_DIR` can point to a persistent storage directory, for example a Render persistent disk mount path
 - `PAYFAST_MERCHANT_ID`, `PAYFAST_MERCHANT_KEY`, and `PAYFAST_PASSPHRASE` enable final balance payments

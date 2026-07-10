@@ -94,7 +94,7 @@ services:
       - key: RESEARCH_RETRY_DELAY_MINUTES
         value: "5"
       - key: RESEARCH_TECHNICAL_RETRY_DELAY_MINUTES
-        value: "15"
+        value: "10"
       - key: DEEP_RESEARCH_MAX_CANDIDATES
         value: "25"
       - key: LOCAL_CODEX_WORKER_ENABLED

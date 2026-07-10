@@ -70,7 +70,7 @@ export const config = {
   deepResearchNoMatchRetries: Number(process.env.DEEP_RESEARCH_NO_MATCH_RETRIES || 2),
   deepResearchConfirmationChecksAfterFound: Number(process.env.DEEP_RESEARCH_CONFIRMATION_CHECKS_AFTER_FOUND || 2),
   researchRetryDelayMinutes: Number(process.env.RESEARCH_RETRY_DELAY_MINUTES || 5),
-  researchTechnicalRetryDelayMinutes: Number(process.env.RESEARCH_TECHNICAL_RETRY_DELAY_MINUTES || 15),
+  researchTechnicalRetryDelayMinutes: Number(process.env.RESEARCH_TECHNICAL_RETRY_DELAY_MINUTES || 10),
   maxResearchCandidates: Number(process.env.DEEP_RESEARCH_MAX_CANDIDATES || 25),
   highTrustThreshold: Number(process.env.HIGH_TRUST_THRESHOLD || 75),
   mediumTrustThreshold: Number(process.env.MEDIUM_TRUST_THRESHOLD || 60),
