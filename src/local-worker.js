@@ -260,6 +260,8 @@ export function localWorkerHealthFeatures() {
       "shipping_total_cost"
     ],
     localSourcingWorkerTrustScoreNormalization: "accepts_0_to_1_or_0_to_100",
+    localWorkerIncompleteReportsRetry: true,
+    localWorkerTechnicalRetryMinutes: localWorkerFailureRetryMinutes(),
     silentLocalWorkerReportReplay: true,
     localWorkerCompletedJobClaimGuard: true,
     ...imageEnrichmentHealthFeatures()
