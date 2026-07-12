@@ -9,7 +9,7 @@ test("private options page supports a one-time cancellation and verified-total p
   const dataDir = mkdtempSync(join(tmpdir(), "arcovia-options-http-"));
   const port = 21000 + Math.floor(Math.random() * 10000);
   const baseUrl = `http://127.0.0.1:${port}`;
-  writeFileSync(join(dataDir, "jobs.json"), JSON.stringify({ jobs: [cancellableJob(), payableJob()] }, null, 2));
+  writeFileSync(join(dataDir, "jobs.json"), JSON.stringify({ jobs: [cancellableJob(), payableJob(), reselectionJob(), lockedQuoteJob()] }, null, 2));
 
   const server = spawn(process.execPath, ["src/server.js"], {
     cwd: process.cwd(),
@@ -33,6 +33,11 @@ test("private options page supports a one-time cancellation and verified-total p
     rmSync(dataDir, { recursive: true, force: true });
   });
   await waitForServer(`${baseUrl}/health`);
+
+  const privateReviewIndex = await fetch(`${baseUrl}/review`);
+  const privateReviewIndexBody = await privateReviewIndex.text();
+  assert.equal(privateReviewIndex.status, 404);
+  assert.doesNotMatch(privateReviewIndexBody, /Hidden supplier|supplier\.example/);
 
   const initialPage = await fetch(`${baseUrl}/options/cancel-token`).then((response) => response.text());
   assert.match(initialPage, /Choose how to continue/);
@@ -78,6 +83,71 @@ test("private options page supports a one-time cancellation and verified-total p
   assert.match(payablePage, /href="\/quote\/quote-token"/);
   assert.doesNotMatch(payablePage, /Pay now — R1,200/);
   assert.doesNotMatch(payablePage, /supplier\.example|Hidden supplier/);
+
+  const blockedOrderPlacement = await fetch(`${baseUrl}/review/quote-action`, {
+    method: "POST",
+    redirect: "manual",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      review_token: "review-pay-job",
+      job_id: "pay-job",
+      action: "mark_order_placed",
+      supplier_order_reference: "MUST-NOT-SAVE"
+    })
+  });
+  assert.equal(blockedOrderPlacement.status, 303);
+  const unpaidOrder = readJob(dataDir, "pay-job");
+  assert.equal(unpaidOrder.status, "payment_pending");
+  assert.equal(unpaidOrder.supplierOrder, undefined);
+  assert.equal(unpaidOrder.timeline.at(-1)?.type, "order_placement_blocked");
+
+  const unsafeNoteSave = await fetch(`${baseUrl}/review/quote-action`, {
+    method: "POST",
+    redirect: "manual",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      review_token: "review-pay-job",
+      job_id: "pay-job",
+      action: "save_quote_draft",
+      final_amount_zar: "1899.50",
+      item_cost: "R1,200 from https://supplier.example/private-product",
+      customer_notes: "Buy from Hidden supplier at https://supplier.example/private-product"
+    })
+  });
+  assert.equal(unsafeNoteSave.status, 303);
+  const noteFiltered = readJob(dataDir, "pay-job");
+  assert.equal(noteFiltered.finalQuote.customerNotes, "");
+  assert.equal(noteFiltered.finalQuote.customerNotesRejectedReason, "external_contact_or_url");
+  assert.equal(noteFiltered.finalQuote.itemCost, "");
+  assert.equal(noteFiltered.finalQuote.customerFieldRejections.itemCost.reason, "external_contact_or_url");
+
+  const reselectionResponse = await fetch(`${baseUrl}/options/select`, {
+    method: "POST",
+    redirect: "manual",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ token: "reselection-token", option_index: "1" })
+  });
+  assert.equal(reselectionResponse.status, 303);
+  const reselected = readJob(dataDir, "reselection-job");
+  assert.equal(reselected.customerSelectedOption.index, 1);
+  assert.equal(reselected.finalQuote.optionIndex, 1);
+  assert.notEqual(reselected.finalQuote.token, "stale-quote-token");
+  assert.equal(reselected.finalQuote.finalAmountZar, undefined);
+  assert.equal(reselected.finalQuote.verifiedAt, undefined);
+  assert.equal(reselected.finalQuote.checkoutAmountZar, undefined);
+  assert.equal(reselected.status, "quote_verifying");
+
+  const lockedReplacement = await fetch(`${baseUrl}/options/select`, {
+    method: "POST",
+    redirect: "manual",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ token: "locked-token", option_index: "1" })
+  });
+  assert.equal(lockedReplacement.status, 409);
+  const locked = readJob(dataDir, "locked-quote-job");
+  assert.equal(locked.customerOptionsDecision, undefined);
+  assert.equal(locked.finalQuote.token, "locked-quote-token");
+  assert.equal(locked.finalQuote.shopifyInvoiceUrl, "https://example.myshopify.com/checkouts/locked");
 });
 
 function cancellableJob() {
@@ -113,10 +183,68 @@ function payableJob() {
       status: "quote_ready",
       paymentStatus: "pending",
       checkoutProvider: "payfast",
+      itemCost: "R1,200 from Hidden supplier",
+      customerNotes: "Buy from Hidden supplier at https://supplier.example/private-product",
       verifiedAt: "2026-07-12T08:10:00.000Z",
       expiresAt: "2099-08-10T08:00:00.000Z"
     }
   };
+}
+
+function reselectionJob() {
+  const job = baseJob({
+    id: "reselection-job",
+    orderName: "#RESELECT",
+    customerOptionsToken: "reselection-token"
+  });
+  job.research.suppliers.push({
+    name: "Second private supplier",
+    url: "https://second-supplier.example/product",
+    price: "R1,500",
+    estimated_total_to_customer: "R1,750",
+    availability: "In stock"
+  });
+  job.selectedSupplier = {
+    index: 0,
+    sourceGroup: "suppliers",
+    supplier: job.research.suppliers[0]
+  };
+  job.finalQuote = {
+    id: "stale-quote-id",
+    token: "stale-quote-token",
+    paymentId: "stale-payment-id",
+    optionIndex: 0,
+    optionLabel: "Supplier 1",
+    sourceGroup: "suppliers",
+    status: "verification_pending",
+    finalAmountZar: 999,
+    checkoutProvider: "shopify",
+    checkoutAmountZar: 999,
+    verifiedAt: "2026-07-12T08:10:00.000Z"
+  };
+  return job;
+}
+
+function lockedQuoteJob() {
+  const job = reselectionJob();
+  job.id = "locked-quote-job";
+  job.orderId = "locked-quote-job";
+  job.orderName = "#LOCKED";
+  job.publicToken = "status-locked-quote-job";
+  job.reviewToken = "review-locked-quote-job";
+  job.customerOptionsToken = "locked-token";
+  job.status = "payment_pending";
+  job.finalQuote = {
+    ...job.finalQuote,
+    id: "locked-quote-id",
+    token: "locked-quote-token",
+    paymentId: "locked-payment-id",
+    status: "quote_ready",
+    paymentStatus: "pending",
+    shopifyInvoiceUrl: "https://example.myshopify.com/checkouts/locked",
+    checkoutPreparedAt: "2026-07-12T08:12:00.000Z"
+  };
+  return job;
 }
 
 function baseJob({ id, orderName, customerOptionsToken }) {

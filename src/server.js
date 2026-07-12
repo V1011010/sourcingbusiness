@@ -131,7 +131,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/review") {
-      return handleReviewAllPage(req, res);
+      return handleReviewAllPage(req, res, url);
     }
 
     if (req.method === "GET" && url.pathname?.startsWith("/review/")) {
@@ -868,7 +868,11 @@ function handleReviewPage(_req, res, token) {
 </html>`);
 }
 
-function handleReviewAllPage(_req, res) {
+function handleReviewAllPage(req, res, url) {
+  if ((!config.adminStatusSecret && !config.flowSecret) || !isAuthorizedAdminRequest(req, url)) {
+    return html(res, 404, "<h1>Page not found</h1>");
+  }
+
   const jobs = readJobs()
     .map((job) => {
       job.reviewToken ||= randomUUID();
@@ -920,7 +924,7 @@ function handleReviewAllPage(_req, res) {
 <body>
   <header>
     <h1>Supplier review</h1>
-    <div class="muted">No password. New orders appear here automatically. Do not share this internal page outside Arcovia.</div>
+    <div class="muted">Private Arcovia admin view. New orders appear here automatically. Do not share this link outside Arcovia.</div>
   </header>
   <main class="monitor-shell">${storageWarningHtml()}${cards || emptyJobsCard()}</main>
 </body>
@@ -996,7 +1000,7 @@ async function handleQuoteAction(req, res, mode) {
   }
 
   const quote = ensureFinalQuote(job, selectedQuoteSource(job));
-  updateQuoteFromForm(quote, form);
+  updateQuoteFromForm(job, quote, form);
 
   if (action === "save_quote_draft") {
     quote.status = "verification_pending";
@@ -1060,6 +1064,11 @@ async function handleQuoteAction(req, res, mode) {
   }
 
   if (action === "mark_order_placed") {
+    if (!isFinalBalancePaid(job)) {
+      addTimeline(job, "order_placement_blocked", "Supplier order was not marked as placed because the customer's final balance has not been confirmed as paid.");
+      upsertJob(job);
+      return redirect(res, auth.redirect);
+    }
     updateSupplierOrderFromForm(job, form);
     job.status = "order_placed";
     job.supplierOrder.placedAt ||= new Date().toISOString();
@@ -1158,13 +1167,13 @@ function handleQuotePage(_req, res, token) {
         <h2>Confirmed total</h2>
         <div class="price">${escapeHtml(displayCurrency(quote.finalAmountZar))}</div>
         <dl>
-          <dt>Item / supplier total</dt><dd>${escapeHtml(quote.itemCost || "Included in confirmed total")}</dd>
-          <dt>Shipping</dt><dd>${escapeHtml(quote.shippingCost || "Included or not applicable")}</dd>
-          <dt>Duties / import handling</dt><dd>${escapeHtml(quote.dutiesCost || "Included if applicable")}</dd>
-          <dt>Arcovia handling</dt><dd>${escapeHtml(quote.handlingFee || "Included if applicable")}</dd>
+          <dt>Item / supplier total</dt><dd>${escapeHtml(customerSafeQuoteDetail(job, quote.itemCost, "Included in confirmed total"))}</dd>
+          <dt>Shipping</dt><dd>${escapeHtml(customerSafeQuoteDetail(job, quote.shippingCost, "Included or not applicable"))}</dd>
+          <dt>Duties / import handling</dt><dd>${escapeHtml(customerSafeQuoteDetail(job, quote.dutiesCost, "Included if applicable"))}</dd>
+          <dt>Arcovia handling</dt><dd>${escapeHtml(customerSafeQuoteDetail(job, quote.handlingFee, "Included if applicable"))}</dd>
           <dt>Quote expires</dt><dd>${escapeHtml(formatEventTime(quote.expiresAt))}</dd>
         </dl>
-        <p class="muted">${escapeHtml(quote.customerNotes || "Final availability and price were reviewed by Arcovia before this quote link was sent.")}</p>
+        <p class="muted">${escapeHtml(customerSafeQuoteNote(job))}</p>
       </div>
     </section>
     ${paymentBlock}
@@ -1270,14 +1279,42 @@ function handlePayfastCancel(_req, res, url) {
   `));
 }
 
-function updateQuoteFromForm(quote, form) {
+function updateQuoteFromForm(job, quote, form) {
   const amount = Number(String(form.get("final_amount_zar") || "").replace(/,/g, "."));
   if (Number.isFinite(amount) && amount > 0) quote.finalAmountZar = amount;
-  quote.itemCost = textFormValue(form, "item_cost") || quote.itemCost || "";
-  quote.shippingCost = textFormValue(form, "shipping_cost") || quote.shippingCost || "";
-  quote.dutiesCost = textFormValue(form, "duties_cost") || quote.dutiesCost || "";
-  quote.handlingFee = textFormValue(form, "handling_fee") || quote.handlingFee || "";
-  quote.customerNotes = textFormValue(form, "customer_notes") || quote.customerNotes || "";
+  const customerVisibleFields = [
+    ["item_cost", "itemCost"],
+    ["shipping_cost", "shippingCost"],
+    ["duties_cost", "dutiesCost"],
+    ["handling_fee", "handlingFee"]
+  ];
+  for (const [formName, quoteName] of customerVisibleFields) {
+    if (!form.has(formName)) continue;
+    const fieldValue = textFormValue(form, formName);
+    const unsafeReason = unsafeCustomerQuoteNoteReason(fieldValue, job);
+    if (unsafeReason) {
+      quote[quoteName] = "";
+      quote.customerFieldRejections ||= {};
+      quote.customerFieldRejections[quoteName] = { reason: unsafeReason, rejectedAt: new Date().toISOString() };
+      addTimeline(job, "customer_quote_field_blocked", "A customer-visible quote field was removed because it contained private supplier information or an external contact/link.", { field: quoteName, reason: unsafeReason });
+    } else {
+      quote[quoteName] = fieldValue;
+      if (quote.customerFieldRejections) delete quote.customerFieldRejections[quoteName];
+    }
+  }
+  const customerNotes = textFormValue(form, "customer_notes");
+  if (form.has("customer_notes")) {
+    const unsafeReason = unsafeCustomerQuoteNoteReason(customerNotes, job);
+    if (unsafeReason) {
+      quote.customerNotes = "";
+      quote.customerNotesRejectedReason = unsafeReason;
+      quote.customerNotesRejectedAt = new Date().toISOString();
+      addTimeline(job, "customer_quote_note_blocked", "A customer quote note was removed because it contained private supplier information or an external contact/link.", { reason: unsafeReason });
+    } else {
+      quote.customerNotes = customerNotes;
+      quote.customerNotesRejectedReason = "";
+    }
+  }
   quote.internalNotes = textFormValue(form, "internal_notes") || quote.internalNotes || "";
   const expiryHours = Number(form.get("expiry_hours") || 24);
   if (Number.isFinite(expiryHours) && expiryHours > 0) {
@@ -1622,6 +1659,17 @@ async function handleCustomerOptionSelect(req, res) {
   }
 
   if (!job.customerSelectedOption) {
+    const proposedQuoteSource = {
+      supplier,
+      optionIndex,
+      sourceGroup: "suppliers"
+    };
+    if (finalQuoteSelectionChanged(job.finalQuote, proposedQuoteSource) && isFinalQuoteSelectionLocked(job)) {
+      return html(res, 409, customerOptionsInactivePage(
+        "This option cannot replace an active payment quote",
+        "Contact Arcovia before continuing. A payment link was already prepared for a different option."
+      ));
+    }
     const decision = recordCustomerOptionsDecision(job, "selected");
     if (!decision.ok) {
       return html(res, 409, customerOptionsInactivePage("This options link is no longer accepting a choice", "Contact Arcovia if you still need help with this request."));
@@ -1859,7 +1907,24 @@ async function handleCustomerOptionImage(_req, res, pathname) {
 }
 
 function ensureFinalQuote(job, { supplier, optionIndex = 0, optionLabel = "", sourceGroup = "suppliers", selectedBy = "arcovia" } = {}) {
-  job.finalQuote ||= {};
+  const now = new Date().toISOString();
+  const previousQuote = job.finalQuote || {};
+  const sourceFingerprint = quoteSourceFingerprint(supplier);
+  const selectionChanged = finalQuoteSelectionChanged(previousQuote, { supplier, optionIndex, sourceGroup });
+
+  if (selectionChanged) {
+    job.finalQuote = {
+      id: randomUUID(),
+      token: randomUUID(),
+      status: "verification_pending",
+      supersedesQuoteId: previousQuote.id || null,
+      resetAt: now,
+      createdAt: now
+    };
+  } else {
+    job.finalQuote ||= {};
+  }
+
   job.finalQuote.id ||= randomUUID();
   job.finalQuote.token ||= randomUUID();
   job.finalQuote.paymentId ||= `ARC-${safePaymentId(job.orderName || job.id)}-${String(job.finalQuote.id).slice(0, 8)}`;
@@ -1868,12 +1933,92 @@ function ensureFinalQuote(job, { supplier, optionIndex = 0, optionLabel = "", so
   job.finalQuote.optionLabel = optionLabel || customerOptionLabel(job, optionIndex);
   job.finalQuote.sourceGroup = sourceGroup;
   job.finalQuote.selectedBy = selectedBy;
+  job.finalQuote.sourceFingerprint = sourceFingerprint;
   job.finalQuote.estimateFromResearch = displayRandTotal(supplier || {});
   job.finalQuote.estimatedAmountZar = parseRandAmount(job.finalQuote.estimateFromResearch);
   job.finalQuote.requiresManualVerification = true;
-  job.finalQuote.updatedAt = new Date().toISOString();
+  job.finalQuote.updatedAt = now;
   if (!job.finalQuote.createdAt) job.finalQuote.createdAt = job.finalQuote.updatedAt;
   return job.finalQuote;
+}
+
+function quoteSourceFingerprint(supplier = {}) {
+  return [supplier.url, supplier.name, supplier.title, supplier.sku, supplier.model]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .join("|");
+}
+
+function finalQuoteSelectionChanged(quote = {}, { supplier, optionIndex = 0, sourceGroup = "suppliers" } = {}) {
+  const previousHasSelection = quote.optionIndex !== undefined || Boolean(quote.sourceFingerprint);
+  if (!previousHasSelection) return false;
+  const nextFingerprint = quoteSourceFingerprint(supplier);
+  return Number(quote.optionIndex || 0) !== Number(optionIndex || 0)
+    || String(quote.sourceGroup || "suppliers") !== String(sourceGroup || "suppliers")
+    || (quote.sourceFingerprint && quote.sourceFingerprint !== nextFingerprint);
+}
+
+function isFinalQuoteSelectionLocked(job) {
+  const quote = job?.finalQuote || {};
+  const quoteStatus = String(quote.status || "").toLowerCase();
+  const paymentStatus = String(quote.paymentStatus || "").toUpperCase();
+  return Boolean(
+    quote.sentAt
+    || quote.shopifyInvoiceUrl
+    || quote.checkoutPreparedAt
+    || ["quote_ready", "payment_pending", "balance_paid", "ready_to_order", "order_placed", "in_transit", "delivered"].includes(quoteStatus)
+    || ["PENDING", "COMPLETE", "PAID"].includes(paymentStatus)
+    || ["payment_pending", "balance_paid", "ready_to_order", "order_placed", "in_transit", "delivered"].includes(String(job?.status || ""))
+  );
+}
+
+function isFinalBalancePaid(job) {
+  const paymentStatus = String(job?.finalQuote?.paymentStatus || "").toUpperCase();
+  return ["COMPLETE", "PAID"].includes(paymentStatus)
+    && ["balance_paid", "ready_to_order", "order_placed", "in_transit", "delivered"].includes(String(job?.status || ""));
+}
+
+function customerSafeQuoteNote(job) {
+  const fallback = "Final availability and price were reviewed by Arcovia before this quote link was sent.";
+  const note = String(job?.finalQuote?.customerNotes || "").trim();
+  return note && !unsafeCustomerQuoteNoteReason(note, job) ? note : fallback;
+}
+
+function customerSafeQuoteDetail(job, value, fallback) {
+  const detail = String(value || "").trim();
+  return detail && !unsafeCustomerQuoteNoteReason(detail, job) ? detail : fallback;
+}
+
+function unsafeCustomerQuoteNoteReason(note, job) {
+  const value = String(note || "").trim();
+  if (!value) return "";
+  if (/\bAI\b/i.test(value)) return "mentions_ai";
+  if (/https?:\/\/|www\.|\b[^\s@]+@[^\s@]+\.[^\s@]+\b/i.test(value)) return "external_contact_or_url";
+
+  const privateSources = [
+    ...(job?.research?.suppliers || []),
+    ...(job?.research?.candidateSources || []),
+    ...(job?.research?.rejectedSources || []),
+    job?.selectedSupplier?.supplier,
+    job?.customerSelectedOption?.supplier
+  ].filter(Boolean);
+
+  const normalized = value.toLowerCase();
+  for (const source of privateSources) {
+    const privateTerms = [source.name, source.title, source.url]
+      .map((term) => String(term || "").trim().toLowerCase())
+      .filter((term) => term.length >= 4);
+    for (const term of privateTerms) {
+      if (normalized.includes(term)) return "private_supplier_identity";
+      try {
+        const host = new URL(term).hostname.replace(/^www\./, "");
+        if (host.length >= 4 && normalized.includes(host)) return "private_supplier_domain";
+      } catch {
+        // Non-URL source names are checked above.
+      }
+    }
+  }
+
+  return "";
 }
 
 function safePaymentId(value) {
@@ -1904,6 +2049,15 @@ function markSupplierSelected(job, supplier, supplierIndex, sourceGroup = "suppl
   const optionLabel = sourceGroup === "suppliers"
     ? customerOptionLabel(job, supplierIndex)
     : `Internal ${sourceGroupLabel(sourceGroup)} option ${supplierIndex + 1}`;
+  const proposedQuoteSource = { supplier, optionIndex: supplierIndex, sourceGroup };
+  if (finalQuoteSelectionChanged(job.finalQuote, proposedQuoteSource) && isFinalQuoteSelectionLocked(job)) {
+    addTimeline(job, "supplier_change_blocked", "Arcovia did not change the selected source because an active or paid customer quote already exists.", {
+      requestedSupplierIndex: supplierIndex,
+      requestedSourceGroup: sourceGroup
+    });
+    upsertJob(job);
+    return false;
+  }
   job.selectedSupplier = {
     index: supplierIndex,
     sourceGroup,
@@ -1930,6 +2084,7 @@ function markSupplierSelected(job, supplier, supplierIndex, sourceGroup = "suppl
   });
   addTimeline(job, "quote_verifying", "Selected source is waiting for live availability, shipping, and final total verification before a payment link is sent.");
   upsertJob(job);
+  return true;
 }
 
 function handleMonitorLitePage(_req, res) {
