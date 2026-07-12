@@ -17,6 +17,10 @@ services:
         sync: false
       - key: SHOPIFY_STORE_DOMAIN
         sync: false
+      - key: SHOPIFY_CLIENT_ID
+        sync: false
+      - key: SHOPIFY_CLIENT_SECRET
+        sync: false
       - key: SHOPIFY_ADMIN_ACCESS_TOKEN
         sync: false
       - key: SHOPIFY_ADMIN_API_VERSION

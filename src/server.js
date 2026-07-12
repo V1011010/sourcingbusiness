@@ -6,7 +6,7 @@ import { emailDiagnostics, sendCustomerEmail, sendEmail, sendSensitiveAdminEmail
 import { amountsMatch, buildPayfastCheckoutFields, formatPayfastAmount, parsePayfastBody, payfastConfigured, payfastProcessUrl, verifyPayfastSignature } from "./payfast.js";
 import { isResearchRunning, queueDueResearchAttempts, queueResearch, researchPolicySummary } from "./research.js";
 import { handleLocalWorkerClaim, handleLocalWorkerHeartbeat, handleLocalWorkerReport, localWorkerHealthFeatures } from "./local-worker.js";
-import { FINAL_BALANCE_SKU, extractShopifyFinalPaymentDetails, fetchShopifyOrderDetails, isShopifyFinalBalanceOrder, prepareShopifyFinalCheckout, shopifyDraftCheckoutConfigured } from "./shopify.js";
+import { FINAL_BALANCE_SKU, extractShopifyFinalPaymentDetails, fetchShopifyOrderDetails, isShopifyFinalBalanceOrder, prepareShopifyFinalCheckout, shopifyAuthenticationMode, shopifyDraftCheckoutConfigured } from "./shopify.js";
 import { adminCustomerOptionsCancelled, adminFinalPaymentReceived, adminRefundDue, customerChoiceReceived, customerFinalPaymentReceived, customerNoOnlinePurchaseAvailable, customerOptionSelectedAdmin, customerOptionsCancellationConfirmed, customerOptionsReady, customerOrderStatusUpdate, customerQuoteReady, customerRefundDue, customerSupplierOrderPlaced, depositReceived, stageUpdate } from "./templates.js";
 import { addTimeline, getJob, readJobs, recordEmailAudit, storageHealth, upsertJob } from "./storage.js";
 import { canCancelCustomerOptions, ensureCustomerOptionsAccess, recordCustomerOptionsDecision } from "./customer-options.js";
@@ -72,6 +72,7 @@ const server = http.createServer(async (req, res) => {
           finalPaymentWorkflow: true,
           finalPaymentStorageReady: isFinalPaymentStorageReady(),
           shopifyDraftCheckoutConfigured: shopifyDraftCheckoutConfigured(),
+          shopifyAuthenticationMode: shopifyAuthenticationMode(),
           shopifyFinalCheckoutEnabled: config.shopifyFinalCheckoutEnabled,
           payfastConfigured: payfastConfigured(),
           payfastSandbox: config.payfastSandbox,

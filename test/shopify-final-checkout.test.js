@@ -5,7 +5,8 @@ import {
   FINAL_BALANCE_SKU,
   buildFinalBalanceDraftInput,
   extractShopifyFinalPaymentDetails,
-  prepareShopifyFinalCheckout
+  prepareShopifyFinalCheckout,
+  shopifyAuthenticationMode
 } from "../src/shopify.js";
 
 const baseJob = {
@@ -128,6 +129,50 @@ test("prepareShopifyFinalCheckout creates a ZAR draft and returns its invoice UR
   }
 });
 
+test("Dev Dashboard client credentials are exchanged and used for Admin API calls", { concurrency: false }, async () => {
+  const restore = installShopifyConfig();
+  config.shopifyAdminAccessToken = "";
+  config.shopifyClientId = "test-client-id";
+  config.shopifyClientSecret = "test-client-secret";
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url: String(url), options });
+    if (String(url).endsWith("/admin/oauth/access_token")) {
+      return jsonResponse({ access_token: "short-lived-token", scope: "read_orders,read_draft_orders,write_draft_orders", expires_in: 86399 });
+    }
+    return jsonResponse({
+      data: {
+        draftOrderCreate: {
+          draftOrder: {
+            id: "gid://shopify/DraftOrder/12",
+            name: "#D12",
+            invoiceUrl: "https://unit-test-store.myshopify.com/123456/invoices/client-credentials",
+            status: "OPEN",
+            totalPriceSet: {
+              presentmentMoney: { amount: "1234.56", currencyCode: "ZAR" },
+              shopMoney: { amount: "1234.56", currencyCode: "ZAR" }
+            }
+          },
+          userErrors: []
+        }
+      }
+    });
+  };
+
+  try {
+    assert.equal(shopifyAuthenticationMode(), "client_credentials");
+    await prepareShopifyFinalCheckout(structuredClone(baseJob));
+    assert.equal(requests.length, 2);
+    assert.match(requests[0].url, /\/admin\/oauth\/access_token$/);
+    assert.match(String(requests[0].options.body), /grant_type=client_credentials/);
+    assert.equal(requests[1].options.headers["X-Shopify-Access-Token"], "short-lived-token");
+  } finally {
+    globalThis.fetch = originalFetch;
+    restore();
+  }
+});
+
 test("prepareShopifyFinalCheckout updates the existing draft instead of opening another", { concurrency: false }, async () => {
   const restore = installShopifyConfig();
   const originalFetch = globalThis.fetch;
@@ -214,6 +259,8 @@ function installShopifyConfig() {
     shopifyFinalCheckoutEnabled: config.shopifyFinalCheckoutEnabled,
     shopifyStoreDomain: config.shopifyStoreDomain,
     shopifyAdminAccessToken: config.shopifyAdminAccessToken,
+    shopifyClientId: config.shopifyClientId,
+    shopifyClientSecret: config.shopifyClientSecret,
     shopifyAdminApiVersion: config.shopifyAdminApiVersion
   };
   config.shopifyFinalCheckoutEnabled = true;

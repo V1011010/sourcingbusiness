@@ -23,9 +23,11 @@ export const config = {
   port: Number(process.env.PORT || 8787),
   publicBaseUrl: process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || 8787}`,
   flowSecret: process.env.ARCOVIA_FLOW_SECRET || "",
-  shopifyWebhookSecret: process.env.SHOPIFY_WEBHOOK_SECRET || "",
+  shopifyWebhookSecret: process.env.SHOPIFY_WEBHOOK_SECRET || process.env.SHOPIFY_CLIENT_SECRET || "",
   shopifyStoreDomain: process.env.SHOPIFY_STORE_DOMAIN || "",
   shopifyAdminAccessToken: process.env.SHOPIFY_ADMIN_ACCESS_TOKEN || "",
+  shopifyClientId: process.env.SHOPIFY_CLIENT_ID || "",
+  shopifyClientSecret: process.env.SHOPIFY_CLIENT_SECRET || "",
   shopifyAdminApiVersion: process.env.SHOPIFY_ADMIN_API_VERSION || "2026-04",
   shopifyFinalCheckoutEnabled: process.env.SHOPIFY_FINAL_CHECKOUT_ENABLED === undefined
     ? true

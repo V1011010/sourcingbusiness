@@ -350,7 +350,8 @@ Do not point the final-balance Flow back into the deposit-only workflow. The bac
 Shopify Flow does not always pass every line-item custom field in the HTTP action payload. To make paid-deposit automation reliable, configure these Render environment variables so the backend can fetch the full paid order from Shopify before deciding whether to start supplier research:
 
 - `SHOPIFY_STORE_DOMAIN` — your `.myshopify.com` domain, for example `kk09qy-xz.myshopify.com`
-- `SHOPIFY_ADMIN_ACCESS_TOKEN` — a custom app Admin API token with `read_orders`, `read_draft_orders`, and `write_draft_orders`
+- `SHOPIFY_CLIENT_ID` and `SHOPIFY_CLIENT_SECRET` — credentials for an installed Dev Dashboard app with `read_orders`, `read_draft_orders`, and `write_draft_orders`; the backend refreshes its 24-hour Admin API token automatically
+- `SHOPIFY_ADMIN_ACCESS_TOKEN` — legacy alternative for an older admin-created app with the same scopes
 - `SHOPIFY_ADMIN_API_VERSION` — defaults to `2026-04`
 - `SHOPIFY_FINAL_CHECKOUT_ENABLED=true` — prefer Shopify draft-order checkout for verified final quotes
 

@@ -2,6 +2,8 @@ import { config } from "./config.js";
 
 export const FINAL_BALANCE_SKU = "ARC-FINAL-BALANCE";
 
+let clientCredentialTokenCache = null;
+
 const ORDER_FIELDS = `
   id
   name
@@ -56,8 +58,14 @@ export function shopifyDraftCheckoutConfigured() {
   return Boolean(
     config.shopifyFinalCheckoutEnabled
     && config.shopifyStoreDomain
-    && config.shopifyAdminAccessToken
+    && shopifyAdminAuthenticationConfigured()
   );
+}
+
+export function shopifyAuthenticationMode() {
+  if (config.shopifyAdminAccessToken) return "static_access_token";
+  if (config.shopifyClientId && config.shopifyClientSecret) return "client_credentials";
+  return "not_configured";
 }
 
 /**
@@ -238,7 +246,7 @@ export function extractShopifyFinalPaymentDetails(payload = {}) {
 }
 
 export async function fetchShopifyOrderDetails(payload) {
-  if (!config.shopifyStoreDomain || !config.shopifyAdminAccessToken) return null;
+  if (!config.shopifyStoreDomain || !shopifyAdminAuthenticationConfigured()) return null;
 
   const gid = getOrderGid(payload);
   if (gid) {
@@ -411,11 +419,12 @@ function formatMoneyResult(money) {
 
 async function shopifyGraphql(query, variables) {
   const domain = normalizeShopifyDomain(config.shopifyStoreDomain);
+  const accessToken = await resolveShopifyAdminAccessToken(domain);
   const response = await fetch(`https://${domain}/admin/api/${config.shopifyAdminApiVersion}/graphql.json`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-Shopify-Access-Token": config.shopifyAdminAccessToken
+      "X-Shopify-Access-Token": accessToken
     },
     body: JSON.stringify({ query, variables })
   });
@@ -434,6 +443,55 @@ async function shopifyGraphql(query, variables) {
   }
 
   return body.data;
+}
+
+function shopifyAdminAuthenticationConfigured() {
+  return Boolean(config.shopifyAdminAccessToken || (config.shopifyClientId && config.shopifyClientSecret));
+}
+
+async function resolveShopifyAdminAccessToken(domain) {
+  if (config.shopifyAdminAccessToken) return config.shopifyAdminAccessToken;
+  if (!config.shopifyClientId || !config.shopifyClientSecret) {
+    throw new Error("Shopify Admin authentication is not configured.");
+  }
+
+  const now = Date.now();
+  if (clientCredentialTokenCache?.accessToken
+    && clientCredentialTokenCache.domain === domain
+    && clientCredentialTokenCache.expiresAt > now + 60_000) {
+    return clientCredentialTokenCache.accessToken;
+  }
+
+  const body = new URLSearchParams({
+    grant_type: "client_credentials",
+    client_id: config.shopifyClientId,
+    client_secret: config.shopifyClientSecret
+  });
+  const response = await fetch(`https://${domain}/admin/oauth/access_token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString()
+  });
+  const text = await response.text();
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error(`Shopify token endpoint returned non-JSON response: ${response.status}`);
+  }
+  if (!response.ok || !payload.access_token) {
+    const reason = String(payload.error_description || payload.error || "token_request_failed").slice(0, 500);
+    throw new Error(`Shopify client-credentials token request failed: ${response.status} ${reason}`);
+  }
+
+  const expiresInSeconds = Math.max(300, Number(payload.expires_in || 86_399));
+  clientCredentialTokenCache = {
+    domain,
+    accessToken: payload.access_token,
+    scope: String(payload.scope || ""),
+    expiresAt: now + expiresInSeconds * 1000
+  };
+  return clientCredentialTokenCache.accessToken;
 }
 
 function normalizeShopifyDomain(domain) {
