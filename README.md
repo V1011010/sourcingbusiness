@@ -56,8 +56,8 @@ Fill in `.env`:
 - `PUBLIC_BASE_URL`
 - `ARCOVIA_FLOW_SECRET`
 - `RESEND_API_KEY` if you want real emails through Resend
-- `EMAIL_PROVIDER=auto` tries SMTP first when credentials are configured, then falls back to Resend/admin relay
-- `SMTP_USER` and `SMTP_PASSWORD` are required for Amazon SES SMTP credentials
+- `EMAIL_PROVIDER=ses` uses Amazon SES through HTTPS, which works on Render Free
+- `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are required for a dedicated least-privilege SES API user
 - `EMAIL_ADMIN_RELAY_ON_FAILURE=true` copies safe customer emails to admin when Resend blocks customer delivery because the sender domain is not verified
 - `ADMIN_EMAIL`
 - `DEEP_RESEARCH_MAX_ATTEMPTS` defaults to `3`; the current worker policy is fixed at 3 completed deep research passes total
@@ -132,7 +132,7 @@ Control the load on the PC:
 ```env
 LOCAL_CODEX_MULTI_AGENT_ENABLED=true
 LOCAL_CODEX_AGENT_CONCURRENCY=2
-LOCAL_CODEX_WORKER_LEASE_MINUTES=90
+LOCAL_CODEX_WORKER_LEASE_MINUTES=20
 ```
 
 To temporarily use the old single-agent worker:
@@ -158,9 +158,10 @@ How it works:
 1. Shopify paid deposit creates a sourcing job on Render.
 2. Render does not call the hosted research API when local worker mode is enabled.
 3. The local worker claims the next ready job from `/local-worker/claim`.
-4. The worker runs `codex exec` locally with a structured JSON schema.
-5. The worker posts the supplier report back to `/local-worker/report`.
-6. Arcovia reviews suppliers in `/review` and manually chooses one.
+4. The worker renews a short lease through `/local-worker/heartbeat` while the research agents are active, so a stopped/restarted worker cannot strand an order for hours.
+5. The worker runs `codex exec` locally with a structured JSON schema.
+6. The worker posts the supplier report back to `/local-worker/report`.
+7. Arcovia reviews suppliers in `/review` and manually chooses one.
 
 Keep the PC awake, online, and signed in. If the local session logs out or the PC sleeps, new research jobs wait until the worker is running again.
 
@@ -168,14 +169,16 @@ Customer email delivery is still handled by the backend email system, not by fre
 
 ## Amazon SES email setup
 
-Amazon SES is the recommended production email provider for Arcovia because it is cheap, reliable, and works through the SMTP sender already built into this backend.
+Amazon SES is the recommended production email provider for Arcovia because it is cheap and reliable. On Render Free, use the SES HTTPS API because Render blocks outbound SMTP ports on free web services.
 
 Recommended SES region: `eu-west-1` / Europe Ireland.
 
-Reason: AWS lists SES SMTP endpoints by region, and the Cape Town region does not currently have SMTP endpoints. Use:
+Recommended SES region: Europe (Ireland), `eu-west-1`. Use:
 
 ```env
-EMAIL_PROVIDER=auto
+EMAIL_PROVIDER=ses
+AWS_ACCESS_KEY_ID=your-limited-ses-api-access-key
+AWS_SECRET_ACCESS_KEY=your-limited-ses-api-secret
 SMTP_HOST=email-smtp.eu-west-1.amazonaws.com
 SMTP_PORT=465
 SMTP_SECURE=true
@@ -185,7 +188,9 @@ AWS_SES_REGION=eu-west-1
 AWS_SES_DOMAIN=arcovia.africa
 ```
 
-Then add the SES SMTP credentials in Render:
+The API credentials must belong to a dedicated least-privilege IAM user that can send email through SES. Add them to Render as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`; never commit them.
+
+SMTP remains available for a paid host that allows outbound SMTP. In that case, add the SES SMTP credentials in Render:
 
 ```env
 SMTP_USER=your-ses-smtp-username
@@ -204,9 +209,9 @@ Do not use normal AWS access keys as the SMTP password. Amazon SES SMTP credenti
 6. Copy the DNS records SES gives you.
 7. Add those DNS records wherever your domain DNS is hosted. Public DNS currently shows `arcovia.africa` using Google DNS nameservers: `ns-cloud-a1.googledomains.com` through `ns-cloud-a4.googledomains.com`.
 8. Wait until SES shows the domain identity as verified.
-9. Go to SES → SMTP settings.
-10. Create SMTP credentials.
-11. Put the SMTP username/password into Render as `SMTP_USER` and `SMTP_PASSWORD`.
+9. Create a dedicated IAM access key with only SES sending permission for the HTTPS API.
+10. Put its access key ID/secret into Render as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+11. Set `EMAIL_PROVIDER=ses`.
 12. Request production access to move SES out of sandbox.
 
 Until production access is approved, SES sandbox can only send to verified recipient addresses. After production access is approved, SES can send to any customer address, but the From domain still must stay verified.
@@ -218,7 +223,7 @@ aws sesv2 create-email-identity --region eu-west-1 --email-identity arcovia.afri
 aws sesv2 get-email-identity --region eu-west-1 --email-identity arcovia.africa
 ```
 
-The second command returns DKIM tokens/records to add in DNS. Create SMTP credentials from the SES console under SMTP settings, then add them to Render as `SMTP_USER` and `SMTP_PASSWORD`.
+The second command returns DKIM tokens/records to add in DNS. For this Render Free deployment, create limited IAM API credentials for sending email and add them to Render; do not use SMTP credentials as AWS API keys.
 
 ## Temporary email fallback
 
@@ -269,9 +274,9 @@ For Render production use:
 
 After that, `/health` will show `features.storage.dataDirConfigured: true`.
 
-Final PayFast product-balance payments stay blocked until persistent storage is active, unless `ARCOVIA_ALLOW_TEMP_PAYMENT_STORAGE=true` is set for local sandbox testing. Do not enable that override for real customers.
+Final product-balance payments stay blocked until persistent storage is active, unless `ARCOVIA_ALLOW_TEMP_PAYMENT_STORAGE=true` is set for local sandbox testing. Do not enable that override for real customers.
 
-## Final quote and PayFast balance flow
+## Final quote, Shopify checkout, and PayFast balance flow
 
 1. Customer pays the R250 deposit in Shopify.
 2. The sourcing worker completes 3 deep checks.
@@ -279,15 +284,17 @@ Final PayFast product-balance payments stay blocked until persistent storage is 
 4. When the customer chooses an option, the job moves to `quote_verifying`.
 5. Arcovia confirms live availability, delivery, duties/import handling, and final price.
 6. In the monitor/review page, Arcovia enters the final rand amount and sends the final quote link.
-7. The customer pays through PayFast from `/quote/...`.
-8. `/payfast/notify` validates the PayFast signature, payment ID, amount, and payment status before marking the job `ready_to_order`.
-9. Arcovia places the supplier order manually and updates the monitor with order reference, tracking number/link, and ETA.
+7. The backend creates or refreshes one anonymous Shopify draft order with SKU `ARC-FINAL-BALANCE`. Its single custom line is non-taxable, non-shipping, and exactly equal to the verified all-inclusive ZAR total. Automatic discounts and checkout discount codes are disabled so the amount cannot drift.
+8. The customer's `Pay now` button opens Shopify's secure invoice checkout, where the customer chooses the store's configured PayFast payment method.
+9. A paid-order Flow request or signed native `ORDERS_PAID` webhook is matched to the Arcovia job and quote IDs. The backend verifies `PAID`, ZAR, and the exact amount before marking the job `ready_to_order`.
+10. If Shopify draft checkout is unavailable before any invoice is created, the existing signed direct-PayFast checkout is used as a fallback when its merchant credentials are configured. `/payfast/notify` remains the only confirmation path for that fallback.
+11. Arcovia places the supplier order manually and updates the monitor with order reference, tracking number/link, and ETA.
 
 Customer emails are guarded so they only contain Arcovia links and never include supplier names, supplier URLs, raw evidence, rejected-source details, or the word "AI".
 
 ## Shopify Flow setup
 
-Create a Shopify Flow workflow:
+Create the sourcing-deposit Shopify Flow workflow:
 
 1. Trigger: **Order paid**
 2. Condition: order contains the deposit product/SKU `ARC-DEPOSIT-250`
@@ -323,15 +330,31 @@ Create a Shopify Flow workflow:
 
 If the Flow body Liquid fields need adjustment in the Shopify editor, keep the same JSON shape and use the fields Flow exposes for your order.
 
+Create a second **Order paid** Flow for final balances:
+
+1. Condition: order contains SKU `ARC-FINAL-BALANCE`.
+2. Send an HTTP request to the same `/flow/order-paid` URL with the same secret header.
+3. The body only needs the order ID and name because the backend securely fetches and verifies the final-balance SKU, Arcovia job/quote attributes, paid status, currency, and total from Shopify:
+
+```json
+{
+  "order_id": "{{order.id}}",
+  "order_name": "{{order.name}}"
+}
+```
+
+Do not point the final-balance Flow back into the deposit-only workflow. The backend also checks `ARC-FINAL-BALANCE` before processing it, so a final payment cannot create a new sourcing job.
+
 ### Recommended Shopify Admin fallback
 
 Shopify Flow does not always pass every line-item custom field in the HTTP action payload. To make paid-deposit automation reliable, configure these Render environment variables so the backend can fetch the full paid order from Shopify before deciding whether to start supplier research:
 
 - `SHOPIFY_STORE_DOMAIN` — your `.myshopify.com` domain, for example `kk09qy-xz.myshopify.com`
-- `SHOPIFY_ADMIN_ACCESS_TOKEN` — a custom app Admin API token with `read_orders`
+- `SHOPIFY_ADMIN_ACCESS_TOKEN` — a custom app Admin API token with `read_orders`, `read_draft_orders`, and `write_draft_orders`
 - `SHOPIFY_ADMIN_API_VERSION` — defaults to `2026-04`
+- `SHOPIFY_FINAL_CHECKOUT_ENABLED=true` — prefer Shopify draft-order checkout for verified final quotes
 
-With these set, the webhook can receive only the order ID/name from Flow, fetch the order's line-item custom attributes, extract the product brief, and queue supplier research immediately.
+After changing custom-app scopes, install/update the app in the store and replace the Render token if Shopify issues a new one. With these settings, the webhook can receive only the order ID/name from Flow, fetch the order safely, distinguish deposits from final balances, and prepare secure final checkout links.
 
 Optional diagnostics:
 

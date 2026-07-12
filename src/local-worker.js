@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
-import { sendCustomerEmail, sendEmail, sendSensitiveAdminEmailForJob } from "./email.js";
+import { reconcileResearchCompletionNotifications } from "./completion-notifications.js";
+import { sendCustomerEmail, sendEmail } from "./email.js";
 import { enrichResearchImages, imageEnrichmentHealthFeatures } from "./image-enrichment.js";
-import { adminRefundDue, adminReport, customerOptionsReady, customerRefundDue } from "./templates.js";
+import { adminRefundDue, customerRefundDue } from "./templates.js";
 import { addTimeline, getJob, readJobs, recordEmailAudit, upsertJob } from "./storage.js";
 import { researchPolicySummary } from "./research.js";
 
@@ -73,6 +74,29 @@ export async function handleLocalWorkerClaim(req, res) {
       prompt: buildLocalCodexPrompt(job, attemptNumber, policy)
     }
   });
+}
+
+export async function handleLocalWorkerHeartbeat(req, res) {
+  if (!isAuthorizedLocalWorker(req)) return json(res, 401, { error: "invalid_worker_secret" });
+
+  const body = parseJsonBody(await readBody(req));
+  const job = getJob(body.job_id);
+  if (!job) return json(res, 404, { error: "job_not_found" });
+
+  const workerId = textValue(body.worker_id);
+  const attemptNumber = Number(body.attempt || 0);
+  if (!job.localWorker
+    || job.localWorker.workerId !== workerId
+    || Number(job.localWorker.attemptNumber || 0) !== attemptNumber) {
+    return json(res, 409, { error: "worker_claim_mismatch" });
+  }
+
+  const now = new Date();
+  job.localWorker.heartbeatAt = now.toISOString();
+  job.localWorker.leaseUntil = addMinutes(now, localWorkerLeaseMinutes()).toISOString();
+  job.updatedAt = now.toISOString();
+  upsertJob(job);
+  return json(res, 200, { ok: true, lease_until: job.localWorker.leaseUntil });
 }
 
 export async function handleLocalWorkerReport(req, res) {
@@ -194,22 +218,10 @@ export async function handleLocalWorkerReport(req, res) {
     });
     upsertJob(job);
 
-    if (!skipEmails) {
-      await sendAdminEmailForJob(job, "admin_research_report", adminReport(job), { sensitive: true });
-    }
-    if (!skipEmails && job.customerEmail && !job.customerOptionsSentAt) {
-      const emailResult = await sendCustomerEmailForJob(job, "customer_options_ready", customerOptionsReady(job));
-      if (emailResult.ok) {
-        job.customerOptionsSentAt = new Date().toISOString();
-        job.status = "options_sent";
-        addTimeline(job, "customer_options_sent", "Anonymized approved-supplier options link sent to customer after research completion.");
-      } else {
-        addTimeline(job, "customer_options_email_failed", `Customer options email failed: ${emailResult.reason || "unknown email error"}.`);
-      }
-      upsertJob(job);
-    }
+    if (!skipEmails) await reconcileResearchCompletionNotifications(job.id);
+    const completedJob = getJob(job.id) || job;
 
-    return json(res, 200, { ok: true, status: job.status, suppliers: trustedSupplierCount });
+    return json(res, 200, { ok: true, status: completedJob.status, suppliers: trustedSupplierCount });
   }
 
   if (attemptNumber >= policy.noMatchAttemptLimit) {
@@ -250,6 +262,8 @@ export function localWorkerHealthFeatures() {
     localSourcingWorkerEnabled: config.localCodexWorkerEnabled,
     localSourcingWorkerEndpoints: true,
     localSourcingWorkerLeaseMinutes: localWorkerLeaseMinutes(),
+    localSourcingWorkerHeartbeat: true,
+    localSourcingWorkerStaleLeaseCap: true,
     localSourcingWorkerMultiAgentEnabled: config.localCodexMultiAgentEnabled,
     localSourcingWorkerAgentConcurrency: config.localCodexAgentConcurrency,
     localSourcingWorkerAgentRoles: [
@@ -281,10 +295,8 @@ async function sendCustomerEmailForJob(job, templateName, template) {
   return result;
 }
 
-async function sendAdminEmailForJob(job, templateName, template, { sensitive = false } = {}) {
-  const result = sensitive
-    ? await sendSensitiveAdminEmailForJob(job, template)
-    : await sendEmail({ to: config.adminEmail, ...template });
+async function sendAdminEmailForJob(job, templateName, template) {
+  const result = await sendEmail({ to: config.adminEmail, ...template });
   recordEmailAudit(job, {
     templateName,
     audience: "admin",
@@ -311,7 +323,7 @@ function findClaimableJob() {
         settleCompletedPolicyJob(job);
         return false;
       }
-      if (job.localWorker?.leaseUntil && new Date(job.localWorker.leaseUntil) > now) return false;
+      if (hasActiveWorkerLease(job, now)) return false;
       if (job.nextResearchAt && new Date(job.nextResearchAt) > now && !isOpenAiQuotaBlocked(job)) return false;
       return true;
     })
@@ -505,6 +517,19 @@ function isOpenAiQuotaBlocked(job) {
   const latest = (job.timeline || []).at(-1);
   const error = String(latest?.meta?.error || job.lastResearchError || "").toLowerCase();
   return error.includes("insufficient_quota") || error.includes("exceeded your current quota");
+}
+
+function hasActiveWorkerLease(job, now = new Date()) {
+  const leaseUntil = Date.parse(job.localWorker?.leaseUntil || "");
+  if (!Number.isFinite(leaseUntil) || leaseUntil <= now.getTime()) return false;
+
+  // A lease written by an older deployment must not strand a job for hours.
+  // Heartbeats extend the effective start; otherwise cap the claim to the
+  // currently configured lease duration.
+  const leaseStart = Date.parse(job.localWorker?.heartbeatAt || job.localWorker?.claimedAt || "");
+  if (!Number.isFinite(leaseStart)) return false;
+  const configuredCap = leaseStart + localWorkerLeaseMinutes() * 60 * 1000;
+  return Math.min(leaseUntil, configuredCap) > now.getTime();
 }
 
 function isAuthorizedLocalWorker(req) {
@@ -704,7 +729,7 @@ function localWorkerReportLooksIncomplete(report) {
 }
 
 function localWorkerLeaseMinutes() {
-  return Math.max(5, Number(config.localWorkerLeaseMinutes || 45));
+  return Math.max(5, Number(config.localWorkerLeaseMinutes || 20));
 }
 
 function parseJsonBody(rawBody) {

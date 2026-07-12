@@ -21,6 +21,8 @@ services:
         sync: false
       - key: SHOPIFY_ADMIN_API_VERSION
         value: 2026-04
+      - key: SHOPIFY_FINAL_CHECKOUT_ENABLED
+        value: true
       - key: ARCOVIA_ADMIN_STATUS_SECRET
         sync: false
       - key: ARCOVIA_DATA_DIR
@@ -40,7 +42,7 @@ services:
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_PROVIDER
-        value: smtp
+        value: ses
       - key: FROM_EMAIL
         value: Arcovia <updates@arcovia.africa>
       - key: RESEND_TEST_FROM_EMAIL
@@ -69,6 +71,10 @@ services:
         value: eu-west-1
       - key: AWS_SES_DOMAIN
         value: arcovia.africa
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
       - key: PAYFAST_MERCHANT_ID
         sync: false
       - key: PAYFAST_MERCHANT_KEY
@@ -104,6 +110,6 @@ services:
       - key: LOCAL_CODEX_AGENT_CONCURRENCY
         value: "2"
       - key: LOCAL_CODEX_WORKER_LEASE_MINUTES
-        value: "90"
+        value: "20"
       - key: DEPOSIT_SKU
         value: ARC-DEPOSIT-250,ARC-SOURCE-250

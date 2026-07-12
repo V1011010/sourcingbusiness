@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
@@ -20,7 +20,7 @@ export function readJobs() {
 
 export function writeJobs(jobs) {
   ensureFile(dbPath, { jobs: [] });
-  writeFileSync(dbPath, JSON.stringify({ jobs }, null, 2));
+  writeJsonAtomically(dbPath, { jobs });
 }
 
 export function upsertJob(job) {
@@ -57,7 +57,7 @@ export function appendOutbox(message) {
     ...message,
     at: new Date().toISOString()
   });
-  writeFileSync(outboxPath, JSON.stringify(current, null, 2));
+  writeJsonAtomically(outboxPath, current);
 }
 
 export function recordEmailAudit(job, message) {
@@ -94,6 +94,25 @@ export function recordEmailAudit(job, message) {
 export function storageHealth() {
   return {
     dataDirConfigured: dataDir !== "data",
-    dataDir
+    dataDir,
+    jobsPath: dbPath,
+    atomicWrites: true
   };
+}
+
+function writeJsonAtomically(path, value) {
+  const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  writeFileSync(tempPath, JSON.stringify(value, null, 2), { encoding: "utf8", flush: true });
+  try {
+    renameSync(tempPath, path);
+  } catch (error) {
+    // Windows can reject replacing an open destination. Preserve a valid JSON
+    // destination with a same-directory copy, then remove only our temp file.
+    try {
+      copyFileSync(tempPath, path);
+    } finally {
+      if (existsSync(tempPath)) unlinkSync(tempPath);
+    }
+    if (!existsSync(path)) throw error;
+  }
 }

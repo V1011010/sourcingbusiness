@@ -1,11 +1,9 @@
-import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
-import { sendCustomerEmail, sendEmail, sendSensitiveAdminEmailForJob } from "./email.js";
+import { reconcileResearchCompletionNotifications } from "./completion-notifications.js";
+import { sendCustomerEmail, sendEmail } from "./email.js";
 import { enrichResearchImages } from "./image-enrichment.js";
 import {
   adminRefundDue,
-  adminReport,
-  customerOptionsReady,
   customerRefundDue,
   researchFailure,
   stageUpdate
@@ -87,10 +85,8 @@ async function sendCustomerEmailForJob(job, templateName, template) {
   return result;
 }
 
-async function sendAdminEmailForJob(job, templateName, template, { sensitive = false } = {}) {
-  const result = sensitive
-    ? await sendSensitiveAdminEmailForJob(job, template)
-    : await sendEmail({ to: config.adminEmail, ...template });
+async function sendAdminEmailForJob(job, templateName, template) {
+  const result = await sendEmail({ to: config.adminEmail, ...template });
   recordEmailAudit(job, {
     templateName,
     audience: "admin",
@@ -194,25 +190,13 @@ export async function runResearch(jobId) {
     job.currentResearchAttempt = null;
     job.nextResearchAt = null;
     job.nextUpdateAt = addHours(new Date(), config.updateIntervalHours).toISOString();
-    job.customerOptionsToken ||= randomUUID();
     addTimeline(job, "research_completed", `All ${maxAttempts} deep sourcing passes are complete. Supplier shortlist is ready for Arcovia human review.`, {
       suppliers: trustedSupplierCount,
       attempts: attemptNumber
     });
     upsertJob(job);
 
-    await sendAdminEmailForJob(job, "admin_research_report", adminReport(job), { sensitive: true });
-    if (job.customerEmail && !job.customerOptionsSentAt) {
-      const emailResult = await sendCustomerEmailForJob(job, "customer_options_ready", customerOptionsReady(job));
-      if (emailResult.ok) {
-        job.customerOptionsSentAt = new Date().toISOString();
-        job.status = "options_sent";
-        addTimeline(job, "customer_options_sent", "Anonymized approved-supplier options link sent to customer after research completion.");
-      } else {
-        addTimeline(job, "customer_options_email_failed", `Customer options email failed: ${emailResult.reason || "unknown email error"}.`);
-      }
-      upsertJob(job);
-    }
+    await reconcileResearchCompletionNotifications(job.id);
     return;
   }
 

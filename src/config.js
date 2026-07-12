@@ -27,6 +27,9 @@ export const config = {
   shopifyStoreDomain: process.env.SHOPIFY_STORE_DOMAIN || "",
   shopifyAdminAccessToken: process.env.SHOPIFY_ADMIN_ACCESS_TOKEN || "",
   shopifyAdminApiVersion: process.env.SHOPIFY_ADMIN_API_VERSION || "2026-04",
+  shopifyFinalCheckoutEnabled: process.env.SHOPIFY_FINAL_CHECKOUT_ENABLED === undefined
+    ? true
+    : ["1", "true", "yes", "on"].includes(String(process.env.SHOPIFY_FINAL_CHECKOUT_ENABLED || "").toLowerCase()),
   openaiApiKey: process.env.OPENAI_API_KEY || "",
   openaiModel: process.env.OPENAI_MODEL || "gpt-5.5",
   openaiMaxOutputTokens: Number(process.env.OPENAI_MAX_OUTPUT_TOKENS || 12000),
@@ -52,6 +55,9 @@ export const config = {
   smtpFromEmail: process.env.SMTP_FROM_EMAIL || process.env.GMAIL_FROM_EMAIL || process.env.FROM_EMAIL || "Arcovia <updates@arcovia.africa>",
   awsSesRegion: process.env.AWS_SES_REGION || "eu-west-1",
   awsSesDomain: process.env.AWS_SES_DOMAIN || "arcovia.africa",
+  awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID || "",
+  awsSecretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "",
+  awsSessionToken: process.env.AWS_SESSION_TOKEN || "",
   adminStatusSecret: process.env.ARCOVIA_ADMIN_STATUS_SECRET || "",
   dataDir: process.env.ARCOVIA_DATA_DIR || process.env.DATA_DIR || "data",
   allowTemporaryPaymentStorage: ["1", "true", "yes", "on"].includes(String(process.env.ARCOVIA_ALLOW_TEMP_PAYMENT_STORAGE || "").toLowerCase()),
@@ -82,7 +88,7 @@ export const config = {
     : ["1", "true", "yes", "on"].includes(String(process.env.LOCAL_CODEX_MULTI_AGENT_ENABLED || "").toLowerCase()),
   localCodexAgentConcurrency: Math.max(1, Math.min(5, Number(process.env.LOCAL_CODEX_AGENT_CONCURRENCY || 2))),
   localWorkerSecret: process.env.ARCOVIA_LOCAL_WORKER_SECRET || process.env.ARCOVIA_FLOW_SECRET || "",
-  localWorkerLeaseMinutes: Number(process.env.LOCAL_CODEX_WORKER_LEASE_MINUTES || 90),
+  localWorkerLeaseMinutes: Number(process.env.LOCAL_CODEX_WORKER_LEASE_MINUTES || 20),
   depositSkus: (process.env.DEPOSIT_SKU || "ARC-DEPOSIT-250,ARC-SOURCE-250")
     .split(",")
     .map((sku) => sku.trim())

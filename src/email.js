@@ -1,5 +1,6 @@
 import net from "node:net";
 import tls from "node:tls";
+import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
 import { appendOutbox } from "./storage.js";
 import { config } from "./config.js";
 
@@ -18,6 +19,7 @@ export function emailDiagnostics() {
     adminEmailConfigured: Boolean(config.adminEmail),
     resendConfigured: Boolean(config.resendApiKey),
     smtpConfigured: smtpConfigured(),
+    sesApiConfigured: sesApiConfigured(),
     smtpHost: config.smtpHost || null,
     smtpPort: config.smtpPort || null,
     smtpSecure: config.smtpSecure,
@@ -63,6 +65,7 @@ export async function sendEmail({ to, subject, text }) {
 }
 
 async function sendWithProvider(provider, message) {
+  if (provider === "ses") return sendViaSes(message);
   if (provider === "smtp") return sendViaSmtp(message);
   if (provider === "resend") return sendViaResend({ ...message, from: config.fromEmail, provider: "resend" });
   return { ok: false, reason: `unknown_email_provider:${provider}` };
@@ -139,10 +142,12 @@ function sendResendEmail({ from, to, subject, text }) {
 function emailProviderPlan() {
   const provider = config.emailProvider || "auto";
   if (provider === "outbox" || provider === "none") return [];
+  if (provider === "ses") return sesApiConfigured() ? ["ses"] : [];
   if (provider === "smtp") return smtpConfigured() ? ["smtp"] : [];
   if (provider === "resend") return config.resendApiKey ? ["resend"] : [];
 
   const providers = [];
+  if (sesApiConfigured()) providers.push("ses");
   if (smtpConfigured()) providers.push("smtp");
   if (config.resendApiKey) providers.push("resend");
   return providers;
@@ -152,13 +157,21 @@ function smtpConfigured() {
   return Boolean(config.smtpHost && config.smtpUser && config.smtpPassword);
 }
 
+function sesApiConfigured() {
+  return Boolean(config.awsSesRegion && config.awsAccessKeyId && config.awsSecretAccessKey);
+}
+
 function emailConfigurationIssues({ providerPlan, senderDomain }) {
   const issues = [];
   const provider = config.emailProvider || "auto";
   if (!providerPlan.length) {
     issues.push("no_active_email_provider");
   }
-  if (provider === "smtp" || provider === "auto") {
+  if (provider === "ses" && !sesApiConfigured()) {
+    if (!config.awsAccessKeyId) issues.push("missing_aws_access_key_id");
+    if (!config.awsSecretAccessKey) issues.push("missing_aws_secret_access_key");
+  }
+  if (provider === "smtp" || (provider === "auto" && !sesApiConfigured() && !config.resendApiKey)) {
     if (!config.smtpHost) issues.push("missing_smtp_host");
     if (!config.smtpUser) issues.push("missing_smtp_user");
     if (!config.smtpPassword) issues.push("missing_smtp_password");
@@ -167,8 +180,8 @@ function emailConfigurationIssues({ providerPlan, senderDomain }) {
   if ((provider === "resend" || provider === "auto") && !config.resendApiKey && provider === "resend") {
     issues.push("missing_resend_api_key");
   }
-  if (provider === "smtp" && config.awsSesDomain && senderDomain && senderDomain !== config.awsSesDomain.toLowerCase()) {
-    issues.push(`smtp_from_domain_not_ses_verified_domain:${senderDomain}`);
+  if (["ses", "smtp"].includes(provider) && config.awsSesDomain && senderDomain && senderDomain !== config.awsSesDomain.toLowerCase()) {
+    issues.push(`from_domain_not_ses_verified_domain:${senderDomain}`);
   }
   if (config.emailOutboxCountsAsSent) {
     issues.push("email_outbox_counts_as_sent_enabled");
@@ -180,6 +193,34 @@ function activeFromEmail() {
   return smtpConfigured() && (config.emailProvider === "smtp" || config.emailProvider === "auto")
     ? config.smtpFromEmail
     : config.fromEmail;
+}
+
+async function sendViaSes({ to, subject, text }) {
+  try {
+    const client = new SESv2Client({
+      region: config.awsSesRegion,
+      credentials: {
+        accessKeyId: config.awsAccessKeyId,
+        secretAccessKey: config.awsSecretAccessKey,
+        ...(config.awsSessionToken ? { sessionToken: config.awsSessionToken } : {})
+      }
+    });
+    const result = await client.send(new SendEmailCommand({
+      FromEmailAddress: config.fromEmail,
+      Destination: { ToAddresses: [to] },
+      ReplyToAddresses: config.replyToEmail ? [config.replyToEmail] : undefined,
+      Content: {
+        Simple: {
+          Subject: { Data: subject || "", Charset: "UTF-8" },
+          Body: { Text: { Data: text || "", Charset: "UTF-8" } }
+        }
+      }
+    }));
+    client.destroy();
+    return { ok: true, dryRun: false, provider: "ses", id: result.MessageId || null };
+  } catch (error) {
+    return { ok: false, dryRun: false, provider: "ses", reason: safeReason(error?.message || error) };
+  }
 }
 
 async function maybeRelayToAdmin({ to, subject, text, failures }) {

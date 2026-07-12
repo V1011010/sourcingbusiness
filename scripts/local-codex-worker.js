@@ -78,6 +78,8 @@ if (!existsSync(runtimeDir)) mkdirSync(runtimeDir, { recursive: true });
 console.log(`[Arcovia local Codex worker] started as ${workerId}`);
 console.log(`[Arcovia local Codex worker] backend: ${baseUrl}`);
 console.log(`[Arcovia local Codex worker] poll interval: ${pollSeconds}s`);
+console.log(`[Arcovia local Codex worker] model: ${codexModel}`);
+console.log(`[Arcovia local Codex worker] reasoning effort: ${codexReasoningEffort}`);
 console.log(`[Arcovia local Codex worker] mode: ${multiAgentEnabled ? `multi-agent (${agentProfiles.length} agents, concurrency ${agentConcurrency})` : "single-agent"}`);
 
 do {
@@ -122,6 +124,7 @@ async function processJob(job) {
 
   writeFileSync(promptPath, job.prompt, "utf8");
   console.log(`[${timestamp()}] claimed ${job.order_name} (${job.research_pass_title})`);
+  const heartbeatTimer = startHeartbeat(job);
 
   try {
     const report = multiAgentEnabled
@@ -133,6 +136,37 @@ async function processJob(job) {
   } catch (error) {
     console.error(`[${timestamp()}] local Codex research failed for ${job.order_name}: ${error.message}`);
     await submitError(job, error);
+  } finally {
+    clearInterval(heartbeatTimer);
+  }
+}
+
+function startHeartbeat(job) {
+  const timer = setInterval(() => {
+    renewLease(job).catch((error) => {
+      console.error(`[${timestamp()}] could not renew ${job.order_name} worker lease: ${error.message}`);
+    });
+  }, 5 * 60 * 1000);
+  timer.unref?.();
+  return timer;
+}
+
+async function renewLease(job) {
+  const response = await fetch(`${baseUrl}/local-worker/heartbeat`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Arcovia-Worker-Secret": workerSecret
+    },
+    body: JSON.stringify({
+      worker_id: workerId,
+      job_id: job.id,
+      attempt: job.attempt
+    })
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`heartbeat failed: ${response.status} ${body}`.slice(0, 500));
   }
 }
 

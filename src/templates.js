@@ -12,6 +12,10 @@ export function customerOptionsLink(job) {
   return `${config.publicBaseUrl.replace(/\/$/, "")}/options/${job.customerOptionsToken}`;
 }
 
+export function reviewLink(job) {
+  return `${config.publicBaseUrl.replace(/\/$/, "")}/review/${job.reviewToken}`;
+}
+
 export function quoteLink(job) {
   return `${config.publicBaseUrl.replace(/\/$/, "")}/quote/${job.finalQuote?.token || ""}`;
 }
@@ -82,6 +86,28 @@ Arcovia`
   };
 }
 
+export function adminReviewReady(job) {
+  const suppliers = job.research?.suppliers || [];
+  const candidates = job.research?.candidateSources || [];
+  const rejected = job.research?.rejectedSources || [];
+
+  return {
+    subject: `Private Arcovia supplier review ready: ${job.orderName}`,
+    text: `Arcovia supplier review is ready
+
+Order: ${job.orderName}
+Customer: ${job.customerName || "n/a"} <${job.customerEmail || "n/a"}>
+Approved options: ${suppliers.length}
+Candidate sources checked: ${candidates.length}
+Rejected sources: ${rejected.length}
+
+Open the private Arcovia review page:
+${reviewLink(job)}
+
+This link opens the internal supplier review, including supplier identities and evidence. Keep it private and do not forward it to the customer. The customer receives a separate anonymous /options link.`
+  };
+}
+
 export function customerChoiceReceived(job) {
   const optionLabel = job.finalQuote?.optionLabel || job.customerSelectedOption?.optionLabel || "your selected option";
 
@@ -99,6 +125,38 @@ ${statusLink(job)}
 Order: ${job.orderName}
 
 Arcovia`
+  };
+}
+
+export function customerOptionsCancellationConfirmed(job) {
+  return {
+    subject: `Arcovia sourcing request cancelled: ${job.orderName}`,
+    text: `Hi ${job.customerName || "there"},
+
+Your Arcovia sourcing request for ${job.orderName} has been cancelled, and no final product payment will be requested.
+
+Because approved sourcing options had already been found and made available for you to review, the R250 sourcing deposit is not refundable under the sourcing-deposit policy.
+
+You can still view the request status here:
+${statusLink(job)}
+
+If you believe this cancellation was made in error, reply to this email and include your order number.
+
+Arcovia`
+  };
+}
+
+export function adminCustomerOptionsCancelled(job) {
+  return {
+    subject: `Customer cancelled after reviewing options: ${job.orderName}`,
+    text: `Arcovia customer cancellation
+
+Order: ${job.orderName}
+Customer: ${job.customerName || "n/a"} <${job.customerEmail || "n/a"}>
+Cancelled at: ${job.cancellation?.requestedAt || job.customerOptionsDecisionAt || "n/a"}
+Reason: ${job.cancellation?.reason || "The approved options were not suitable."}
+
+No final product payment is due. The R250 sourcing deposit is recorded as non-refundable because approved options had already been made available. Do not place a supplier order for this request.`
   };
 }
 
@@ -224,7 +282,8 @@ Order: ${job.orderName}
 Customer: ${job.customerName || "n/a"} <${job.customerEmail || "n/a"}>
 Selected option: ${quote.optionLabel || "n/a"}
 Paid amount: ${displayMoney(quote.finalAmountZar)}
-PayFast payment ID: ${quote.paymentId || "n/a"}
+Payment channel: ${quote.checkoutProvider === "shopify" ? "Shopify checkout / PayFast" : "Direct PayFast"}
+Payment reference: ${quote.shopifyPaidOrderName || quote.paymentId || "n/a"}
 
 Internal supplier details:
 Supplier/source: ${selected.name || selected.supplier_name || "Unnamed supplier"}
@@ -253,6 +312,7 @@ export function stageUpdate(job) {
     order_placed: "Your item order has been placed. Tracking details will be added when available.",
     in_transit: "Your item order is in transit.",
     delivered: "Your item order has been marked as delivered.",
+    cancelled_by_customer: "You cancelled this sourcing request after approved options were made available. No final product payment is due.",
     no_match: "We have not found a trustworthy match yet. If we cannot find one within the sourcing window, the refundable-deposit rule applies.",
     no_online_purchase_available: "Arcovia could not confirm a safe online purchase route for this request. Your refundable deposit is marked for refund processing.",
     payment_failed: "The final payment was not confirmed. Please use the quote link again or contact Arcovia.",
