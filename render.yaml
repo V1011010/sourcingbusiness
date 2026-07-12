@@ -15,6 +15,8 @@ services:
         sync: false
       - key: ARCOVIA_FLOW_SECRET
         sync: false
+      - key: ARCOVIA_FINAL_FLOW_SECRET
+        sync: false
       - key: SHOPIFY_STORE_DOMAIN
         sync: false
       - key: SHOPIFY_CLIENT_ID

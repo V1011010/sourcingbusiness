@@ -215,9 +215,14 @@ setInterval(() => {
 }, 60_000);
 
 async function handleFlowOrderPaid(req, res) {
-  if (config.flowSecret) {
-    const provided = req.headers["x-arcovia-flow-secret"];
-    if (provided !== config.flowSecret) return json(res, 401, { error: "invalid_flow_secret" });
+  if (config.flowSecret || config.finalBalanceFlowSecret) {
+    const providedDepositSecret = req.headers["x-arcovia-flow-secret"];
+    const providedFinalSecret = req.headers["x-arcovia-final-flow-secret"];
+    const authorized = Boolean(
+      (config.flowSecret && providedDepositSecret === config.flowSecret)
+      || (config.finalBalanceFlowSecret && providedFinalSecret === config.finalBalanceFlowSecret)
+    );
+    if (!authorized) return json(res, 401, { error: "invalid_flow_secret" });
   }
 
   const rawBody = await readBody(req);

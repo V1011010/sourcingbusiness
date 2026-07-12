@@ -23,6 +23,7 @@ export const config = {
   port: Number(process.env.PORT || 8787),
   publicBaseUrl: process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || 8787}`,
   flowSecret: process.env.ARCOVIA_FLOW_SECRET || "",
+  finalBalanceFlowSecret: process.env.ARCOVIA_FINAL_FLOW_SECRET || "",
   shopifyWebhookSecret: process.env.SHOPIFY_WEBHOOK_SECRET || process.env.SHOPIFY_CLIENT_SECRET || "",
   shopifyStoreDomain: process.env.SHOPIFY_STORE_DOMAIN || "",
   shopifyAdminAccessToken: process.env.SHOPIFY_ADMIN_ACCESS_TOKEN || "",

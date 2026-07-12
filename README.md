@@ -333,8 +333,9 @@ If the Flow body Liquid fields need adjustment in the Shopify editor, keep the s
 Create a second **Order paid** Flow for final balances:
 
 1. Condition: order contains SKU `ARC-FINAL-BALANCE`.
-2. Send an HTTP request to the same `/flow/order-paid` URL with the same secret header.
-3. The body only needs the order ID and name because the backend securely fetches and verifies the final-balance SKU, Arcovia job/quote attributes, paid status, currency, and total from Shopify:
+2. Send an HTTP request to the same `/flow/order-paid` URL.
+3. Add header `X-Arcovia-Final-Flow-Secret`; its value must match `ARCOVIA_FINAL_FLOW_SECRET` in Render.
+4. The body only needs the order ID and name because the backend securely fetches and verifies the final-balance SKU, Arcovia job/quote attributes, paid status, currency, and total from Shopify:
 
 ```json
 {
