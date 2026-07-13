@@ -85,7 +85,7 @@ function tunnelConfigured() {
 
 function tunnelArgs() {
   if (process.env.CLOUDFLARE_TUNNEL_TOKEN) {
-    return ["tunnel", "run", "--token", process.env.CLOUDFLARE_TUNNEL_TOKEN];
+    return ["tunnel", "run", "--url", localBaseUrl, "--token", process.env.CLOUDFLARE_TUNNEL_TOKEN];
   }
   const args = ["tunnel"];
   if (process.env.CLOUDFLARE_TUNNEL_CONFIG) {
