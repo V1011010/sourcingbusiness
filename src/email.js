@@ -1,5 +1,6 @@
 import net from "node:net";
 import tls from "node:tls";
+import { existsSync, readFileSync } from "node:fs";
 import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
 import { appendOutbox } from "./storage.js";
 import { config } from "./config.js";
@@ -20,6 +21,9 @@ export function emailDiagnostics() {
     resendConfigured: Boolean(config.resendApiKey),
     smtpConfigured: smtpConfigured(),
     sesApiConfigured: sesApiConfigured(),
+    gmailApiConfigured: gmailApiConfigured(),
+    gmailUser: config.gmailUser || null,
+    gmailFromEmail: config.gmailFromEmail || null,
     smtpHost: config.smtpHost || null,
     smtpPort: config.smtpPort || null,
     smtpSecure: config.smtpSecure,
@@ -67,6 +71,7 @@ export async function sendEmail({ to, subject, text }) {
 async function sendWithProvider(provider, message) {
   if (provider === "ses") return sendViaSes(message);
   if (provider === "smtp") return sendViaSmtp(message);
+  if (provider === "gmail") return sendViaGmail(message);
   if (provider === "resend") return sendViaResend({ ...message, from: config.fromEmail, provider: "resend" });
   return { ok: false, reason: `unknown_email_provider:${provider}` };
 }
@@ -144,9 +149,11 @@ function emailProviderPlan() {
   if (provider === "outbox" || provider === "none") return [];
   if (provider === "ses") return sesApiConfigured() ? ["ses"] : [];
   if (provider === "smtp") return smtpConfigured() ? ["smtp"] : [];
+  if (provider === "gmail") return gmailApiConfigured() ? ["gmail"] : [];
   if (provider === "resend") return config.resendApiKey ? ["resend"] : [];
 
   const providers = [];
+  if (gmailApiConfigured()) providers.push("gmail");
   if (sesApiConfigured()) providers.push("ses");
   if (smtpConfigured()) providers.push("smtp");
   if (config.resendApiKey) providers.push("resend");
@@ -161,6 +168,19 @@ function sesApiConfigured() {
   return Boolean(config.awsSesRegion && config.awsAccessKeyId && config.awsSecretAccessKey);
 }
 
+function gmailApiConfigured() {
+  if (!config.googleOAuthClientPath || !config.googleOAuthTokenPath) return false;
+  if (!existsSync(config.googleOAuthClientPath) || !existsSync(config.googleOAuthTokenPath)) return false;
+  try {
+    const credentials = readGoogleJson(config.googleOAuthClientPath);
+    const token = readGoogleJson(config.googleOAuthTokenPath);
+    const client = credentials.installed || credentials.web || {};
+    return Boolean(client.client_id && client.client_secret && token.refresh_token && config.gmailUser && config.gmailFromEmail);
+  } catch {
+    return false;
+  }
+}
+
 function emailConfigurationIssues({ providerPlan, senderDomain }) {
   const issues = [];
   const provider = config.emailProvider || "auto";
@@ -170,6 +190,12 @@ function emailConfigurationIssues({ providerPlan, senderDomain }) {
   if (provider === "ses" && !sesApiConfigured()) {
     if (!config.awsAccessKeyId) issues.push("missing_aws_access_key_id");
     if (!config.awsSecretAccessKey) issues.push("missing_aws_secret_access_key");
+  }
+  if (provider === "gmail" && !gmailApiConfigured()) {
+    if (!config.googleOAuthClientPath || !existsSync(config.googleOAuthClientPath)) issues.push("missing_google_oauth_client");
+    if (!config.googleOAuthTokenPath || !existsSync(config.googleOAuthTokenPath)) issues.push("missing_google_oauth_token");
+    if (!config.gmailUser) issues.push("missing_gmail_user");
+    if (!config.gmailFromEmail) issues.push("missing_gmail_from_email");
   }
   if (provider === "smtp" || (provider === "auto" && !sesApiConfigured() && !config.resendApiKey)) {
     if (!config.smtpHost) issues.push("missing_smtp_host");
@@ -190,9 +216,76 @@ function emailConfigurationIssues({ providerPlan, senderDomain }) {
 }
 
 function activeFromEmail() {
+  if (gmailApiConfigured() && (config.emailProvider === "gmail" || config.emailProvider === "auto")) {
+    return config.gmailFromEmail;
+  }
   return smtpConfigured() && (config.emailProvider === "smtp" || config.emailProvider === "auto")
     ? config.smtpFromEmail
     : config.fromEmail;
+}
+
+let gmailAccessTokenCache = null;
+
+async function sendViaGmail({ to, subject, text }) {
+  try {
+    const accessToken = await getGmailAccessToken();
+    const messageId = `<arcovia-${Date.now()}-${Math.random().toString(16).slice(2)}@arcovia.africa>`;
+    const mime = buildPlainTextMime({
+      from: config.gmailFromEmail,
+      replyTo: config.replyToEmail,
+      to,
+      subject,
+      text,
+      messageId
+    });
+    const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ raw: Buffer.from(mime, "utf8").toString("base64url") })
+    });
+    const detail = await response.text();
+    if (!response.ok) throw new Error(`gmail_send_failed:${response.status}:${detail}`);
+    const parsed = parseJson(detail);
+    return { ok: true, dryRun: false, provider: "gmail", id: parsed?.id || messageId };
+  } catch (error) {
+    gmailAccessTokenCache = null;
+    return { ok: false, dryRun: false, provider: "gmail", reason: safeReason(error?.message || error) };
+  }
+}
+
+async function getGmailAccessToken() {
+  if (gmailAccessTokenCache?.token && gmailAccessTokenCache.expiresAt > Date.now() + 60_000) {
+    return gmailAccessTokenCache.token;
+  }
+  const credentials = readGoogleJson(config.googleOAuthClientPath);
+  const savedToken = readGoogleJson(config.googleOAuthTokenPath);
+  const client = credentials.installed || credentials.web || {};
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: client.client_id || "",
+      client_secret: client.client_secret || "",
+      refresh_token: savedToken.refresh_token || "",
+      grant_type: "refresh_token"
+    })
+  });
+  const detail = await response.text();
+  if (!response.ok) throw new Error(`gmail_token_refresh_failed:${response.status}:${detail}`);
+  const parsed = parseJson(detail);
+  if (!parsed?.access_token) throw new Error("gmail_token_refresh_missing_access_token");
+  gmailAccessTokenCache = {
+    token: parsed.access_token,
+    expiresAt: Date.now() + Math.max(60, Number(parsed.expires_in || 3600)) * 1000
+  };
+  return gmailAccessTokenCache.token;
+}
+
+function readGoogleJson(path) {
+  return JSON.parse(readFileSync(path, "utf8"));
 }
 
 async function sendViaSes({ to, subject, text }) {
@@ -433,6 +526,8 @@ function safeReason(value) {
   return String(value || "")
     .replace(/re_[A-Za-z0-9_-]+/g, "[redacted-resend-key]")
     .replace(/sk-[A-Za-z0-9_-]+/g, "[redacted-api-key]")
+    .replace(/GOCSPX-[A-Za-z0-9_-]+/g, "[redacted-google-client-secret]")
+    .replace(/ya29\.[A-Za-z0-9._-]+/g, "[redacted-google-access-token]")
     .slice(0, 500);
 }
 

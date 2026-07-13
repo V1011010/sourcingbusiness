@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { homedir } from "node:os";
 
 loadDotEnv(resolve(".env"));
 
@@ -56,6 +57,10 @@ export const config = {
   smtpUser: process.env.SMTP_USER || process.env.GMAIL_USER || "",
   smtpPassword: process.env.SMTP_PASSWORD || process.env.GMAIL_APP_PASSWORD || "",
   smtpFromEmail: process.env.SMTP_FROM_EMAIL || process.env.GMAIL_FROM_EMAIL || process.env.FROM_EMAIL || "Arcovia <updates@arcovia.africa>",
+  googleOAuthClientPath: process.env.GOOGLE_OAUTH_CLIENT_PATH || resolve(homedir(), ".arcovia", "google-oauth-client.json"),
+  googleOAuthTokenPath: process.env.GOOGLE_OAUTH_TOKEN_PATH || resolve(homedir(), ".arcovia", "google-oauth-token.json"),
+  gmailUser: process.env.GMAIL_USER || "arcovia.africa@gmail.com",
+  gmailFromEmail: process.env.GMAIL_FROM_EMAIL || "Arcovia <arcovia.africa@gmail.com>",
   awsSesRegion: process.env.AWS_SES_REGION || "eu-west-1",
   awsSesDomain: process.env.AWS_SES_DOMAIN || "arcovia.africa",
   awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID || "",

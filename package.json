@@ -12,6 +12,7 @@
     "test:dry-run": "node scripts/dry-run-paid-order.js",
     "worker:codex": "node scripts/local-codex-worker.js",
     "worker:codex:once": "node scripts/local-codex-worker.js --once",
+    "email:gmail:authorize": "node scripts/google-oauth-authorize.js",
     "local:start": "node --env-file=.env scripts/local-runtime-supervisor.js",
     "local:status": "node scripts/local-runtime-status.js"
   },
