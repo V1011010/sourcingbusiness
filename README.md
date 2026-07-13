@@ -69,8 +69,8 @@ Fill in `.env`:
 - `LOCAL_CODEX_WORKER_ENABLED=true` makes the hosted backend wait for the local Codex worker instead of calling OpenAI directly
 - `LOCAL_CODEX_MULTI_AGENT_ENABLED=true` makes each local research pass run multiple focused sourcing agents
 - `LOCAL_CODEX_AGENT_CONCURRENCY=2` controls how many local Codex agents run at once
-- `LOCAL_CODEX_MODEL=gpt-5.6-luna` keeps sourcing on the lower-cost model by default
-- `LOCAL_CODEX_REASONING_EFFORT=low` keeps each sourcing-agent run token-efficient by default
+- `LOCAL_CODEX_MODEL=gpt-5.5` keeps sourcing on GPT-5.5 by default
+- `LOCAL_CODEX_REASONING_EFFORT=xhigh` runs each sourcing-agent pass at extra-high reasoning effort by default
 - `ARCOVIA_LOCAL_WORKER_SECRET` can be set separately; if blank, the worker uses `ARCOVIA_FLOW_SECRET`
 - `ARCOVIA_DATA_DIR` can point to a persistent storage directory, for example a Render persistent disk mount path
 - `PAYFAST_MERCHANT_ID`, `PAYFAST_MERCHANT_KEY`, and `PAYFAST_PASSPHRASE` enable final balance payments
@@ -87,6 +87,45 @@ Health check:
 ```text
 GET http://localhost:8787/health
 ```
+
+## Free local production runtime
+
+Arcovia can run without paid Render storage when the owner's Windows computer stays online. The local production runtime starts and supervises:
+
+- the Arcovia HTTP server on port `8787`
+- the local multi-agent sourcing worker
+- a named Cloudflare Tunnel for Shopify callbacks and private customer links
+- Gmail SMTP delivery using a revocable Google App Password
+- six-hourly local backups of `jobs.json` and `outbox.json`
+
+Local production values:
+
+```env
+PUBLIC_BASE_URL=https://sourcing.arcovia.africa
+ARCOVIA_DATA_DIR=C:/absolute/path/to/sourcing/data
+ARCOVIA_LOCAL_BASE_URL=http://127.0.0.1:8787
+LOCAL_CODEX_WORKER_ENABLED=true
+EMAIL_PROVIDER=smtp
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+SMTP_SECURE=true
+SMTP_USER=arcovia.africa@gmail.com
+SMTP_FROM_EMAIL=Arcovia <arcovia.africa@gmail.com>
+REPLY_TO_EMAIL=arcovia.africa@gmail.com
+CLOUDFLARE_TUNNEL_NAME=arcovia-sourcing
+```
+
+Keep `SMTP_PASSWORD`, Shopify client credentials, Flow secrets, and any Cloudflare tunnel token out of Git. `START_ARCOVIA_LOCAL.cmd` loads those values from the current user's Windows environment and then loads non-secret settings from `.env`.
+
+Start, inspect, or stop the full local runtime with:
+
+```text
+START_ARCOVIA_LOCAL.cmd
+STATUS_ARCOVIA_LOCAL.cmd
+STOP_ARCOVIA_LOCAL.cmd
+```
+
+The customer and Shopify URLs only work while the computer, internet connection, and Cloudflare Tunnel are online. Configure the supplied start command to run at Windows logon after the Gmail and Cloudflare account steps are complete.
 
 Dry-run test:
 
@@ -145,6 +184,18 @@ Or double-click:
 
 ```text
 scripts/start-local-codex-worker.cmd
+```
+
+The Windows start script supervises the local worker and restarts it after unexpected exits. To stop it intentionally, run:
+
+```text
+scripts/stop-local-codex-worker.cmd
+```
+
+To check the live PID, model, effort, and last poll:
+
+```text
+scripts/status-local-codex-worker.cmd
 ```
 
 To test one poll without leaving it running:

@@ -11,7 +11,9 @@
     "test": "node --test",
     "test:dry-run": "node scripts/dry-run-paid-order.js",
     "worker:codex": "node scripts/local-codex-worker.js",
-    "worker:codex:once": "node scripts/local-codex-worker.js --once"
+    "worker:codex:once": "node scripts/local-codex-worker.js --once",
+    "local:start": "node --env-file=.env scripts/local-runtime-supervisor.js",
+    "local:status": "node scripts/local-runtime-status.js"
   },
   "engines": {
     "node": ">=20"
